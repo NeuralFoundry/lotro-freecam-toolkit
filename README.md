@@ -11,36 +11,29 @@ while it's attached, and puts them back when you close it.
 It's open source, and I'd genuinely rather you read it (or have an AI read it) than take
 my word for anything below. There's a whole section on that further down.
 
-Virüstotal:
+virustotal:
 
-https://www.virustotal.com/gui/file/5c42c7d1a1e663a0c1395ae3b1dff3002ad6c6a6197505a1ee8f95d02b224fa0?nocache=1
-5c42c7d1a1e663a0c1395ae3b1dff3002ad6c6a6197505a1ee8f95d02b224fa0
-lotro_freecam_minimal.js
+https://www.virustotal.com/gui/file/5c42c7d1a1e663a0c1395ae3b1dff3002ad6c6a6197505a1ee8f95d02b224fa0?nocache=1 5c42c7d1a1e663a0c1395ae3b1dff3002ad6c6a6197505a1ee8f95d02b224fa0 lotro_freecam_minimal.js
 
-https://www.virustotal.com/gui/file/b95e27d78dc30042b02206cea569778cba5c66661bd4d63a4e90bd116d91bb86?nocache=1
-b95e27d78dc30042b02206cea569778cba5c66661bd4d63a4e90bd116d91bb86
-lotro_freecam_cinematic.js
-
+https://www.virustotal.com/gui/file/b95e27d78dc30042b02206cea569778cba5c66661bd4d63a4e90bd116d91bb86?nocache=1 b95e27d78dc30042b02206cea569778cba5c66661bd4d63a4e90bd116d91bb86 lotro_freecam_cinematic.js
 
 lotro_freecam_minimal.js
 
-SHA-256  5c42c7d1a1e663a0c1395ae3b1dff3002ad6c6a6197505a1ee8f95d02b224fa0
+SHA-256 5c42c7d1a1e663a0c1395ae3b1dff3002ad6c6a6197505a1ee8f95d02b224fa0
 
-SHA-1    67d6e4aebb8cccaf07a74cc766bf26777d148451
+SHA-1 67d6e4aebb8cccaf07a74cc766bf26777d148451
 
-MD5      afc50d49ba9adeede1c9cf6b931cfe43
+MD5 afc50d49ba9adeede1c9cf6b931cfe43
 
-Size    11.223 bayt
+Size 11.223 bayt
 
 lotro_freecam_cinematic.js
 
-SHA-256  b95e27d78dc30042b02206cea569778cba5c66661bd4d63a4e90bd116d91bb86
+SHA-256 b95e27d78dc30042b02206cea569778cba5c66661bd4d63a4e90bd116d91bb86
 
-SHA-1    bef8aa154b6a7e9340608271636c2aafd4d29de0
+SHA-1 bef8aa154b6a7e9340608271636c2aafd4d29de0
 
-MD5      03d1101088c38fc17cba5caaf314c82f
-
-Size    228.180 bayt
+MD5 03d1101088c38fc17cba5caaf314c82f
 
 ## Which file do you want?
 
@@ -195,6 +188,10 @@ Download whichever of the two you want (see [Which file do you want?](#which-fil
 — if you're unsure, take the minimal one) and put it anywhere you like. Desktop is fine.
 Nothing needs to go into the game folder, and nothing gets installed.
 
+There's also **`Start LOTRO Freecam.bat`**, which is optional. It's a launcher that does
+Step 5 for you. If you want it, put it in the same folder as the `.js` files — it looks
+for them next to itself.
+
 Confirm you have the file I'm describing:
 
 ```powershell
@@ -219,8 +216,22 @@ MD5      03d1101088c38fc17cba5caaf314c82f
 Size     228,180 bytes
 ```
 
+**`Start LOTRO Freecam.bat`** — optional launcher
+
+```
+SHA-256  0054c86c1ac4b70550ee0e6926b950eef19f2d370511a5b91a59ed5b8115d5d2
+SHA-1    41ff8fc9158edbcd1323682bad14614c8cc6c620
+MD5      d04c5d1c78aa26acb9c2fa813745914e
+Size     2,958 bytes
+```
+
 If it doesn't match, you have a different file and nothing in this README applies to it.
-There are VirusTotal scans for both in the [Is it safe?](#is-it-safe) section.
+There are VirusTotal scans in the [Is it safe?](#is-it-safe) section.
+
+A word on the `.bat` in particular: a batch file that asks for administrator rights is
+exactly the shape a lot of malware takes, and you're right to look at it twice. It's 90
+lines of plain text with comments — read it before you run it. If it doesn't say what
+I've told you it says, don't run it.
 
 ### Step 4: set up the game
 
@@ -235,6 +246,18 @@ Two things before you attach:
 
 ### Step 5: attach
 
+**The short version:** double-click `Start LOTRO Freecam.bat`. It asks for admin,
+finds the game, asks which of the two scripts you want, and attaches. If that works
+for you, skip to Step 6.
+
+It's a plain text file — open it in Notepad if you want to see what it runs. All it
+does is check Frida is installed, pull the game's process ID out of `tasklist`, and
+run the same `frida -p ... -l ...` command you'd type yourself. Everything below is
+that command by hand, which is worth knowing anyway since the console it opens is how
+you talk to the script.
+
+---
+
 Open PowerShell **as Administrator** — right-click the Start button, "Terminal
 (Admin)" or "Windows PowerShell (Admin)". Frida can't attach to the game process
 without it.
@@ -242,6 +265,29 @@ without it.
 ```powershell
 cd C:\path\to\the\folder
 frida -p (Get-Process lotroclient64).Id -l lotro_freecam_minimal.js
+```
+
+If the path has spaces in it — and it probably does, `Documents` under OneDrive
+usually looks something like `...\The Lord of the Rings Online\...` — it needs quotes,
+or PowerShell reads it as several separate arguments and the `cd` silently fails:
+
+```powershell
+cd "C:\Users\you\OneDrive\Documents\The Lord of the Rings Online\LOTRO Freecam"
+```
+
+You can skip the `cd` entirely and hand Frida the full path instead. It doesn't care
+what folder you're in:
+
+```powershell
+frida -p (Get-Process lotroclient64).Id -l "C:\full\path\to\lotro_freecam_minimal.js"
+```
+
+And if you'd rather not type a path at all, this searches your user folder for the
+script and passes whatever it finds. Takes a few seconds, but it works no matter where
+you saved it:
+
+```powershell
+frida -p (Get-Process lotroclient64).Id -l (Get-ChildItem $env:USERPROFILE -Recurse -Filter lotro_freecam_minimal.js -EA 0 | Select -First 1).FullName
 ```
 
 You should see a banner listing the controls. The cinematic build also prints a
@@ -271,6 +317,11 @@ as Administrator.
 
 **`frida` is not recognised** — Step 2 didn't complete, or you need a fresh PowerShell
 window so it picks up the updated PATH.
+
+**"No such file or directory: '...lotro_freecam_minimal.js'"** — Frida attached fine,
+it just can't find the script. Almost always the `cd` didn't take you where you thought
+it did. Run `pwd` to see where you actually are, or use the search-for-it command above
+and stop worrying about paths.
 
 ---
 
@@ -897,6 +948,8 @@ Scanned against ~70 antivirus engines:
   https://www.virustotal.com/gui/file/5c42c7d1a1e663a0c1395ae3b1dff3002ad6c6a6197505a1ee8f95d02b224fa0
 - `lotro_freecam_cinematic.js` -
   https://www.virustotal.com/gui/file/b95e27d78dc30042b02206cea569778cba5c66661bd4d63a4e90bd116d91bb86
+- `Start LOTRO Freecam.bat` -
+  https://www.virustotal.com/gui/file/0054c86c1ac4b70550ee0e6926b950eef19f2d370511a5b91a59ed5b8115d5d2
 
 Two honest caveats about what that link is worth.
 
