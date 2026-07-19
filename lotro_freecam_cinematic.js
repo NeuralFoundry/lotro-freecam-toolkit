@@ -1211,16 +1211,21 @@ function keyDown(key) {
   return (getAsyncKeyState(key) & 0x8000) !== 0;
 }
 
-// Every toggle requires Ctrl to be held at the moment the key goes down. LOTRO binds
-// the bare number and function keys to quickslots and panels, so an unmodified hotkey
-// would fire an ability at the same time as changing a render setting. Freecam movement
-// is exempt - it is only live while the camera is flying, and it needs Ctrl free for the
-// precision modifier.
-function ctrlPressed(key, name) {
+// Every toggle requires a modifier key to be held at the moment the key goes down. LOTRO
+// binds the bare number and function keys to quickslots and panels, so an unmodified
+// hotkey would fire an ability at the same time as changing a render setting. Freecam
+// movement is exempt - it is only live while the camera is flying, and it needs Ctrl free
+// for the precision modifier.
+//
+// The modifier is a parameter (not hardcoded to VK_CONTROL) so each feature's hotkey can
+// be rebound to a different modifier later without touching this function - e.g. moving a
+// toggle off Ctrl to free that combo up, or giving a specific feature its own modifier,
+// without forcing every hotkey in the file to share one fixed key.
+function dualKeyPressed(modifier, key, name) {
   // keyPressed() runs first and unconditionally so its edge state stays accurate even
-  // when the key is pressed without Ctrl.
+  // when the key is pressed without the modifier.
   const pressed = keyPressed(key, name);
-  return pressed && keyDown(VK_CONTROL);
+  return pressed && keyDown(modifier);
 }
 
 function keyPressed(key, name) {
@@ -3405,7 +3410,7 @@ cameraInputHook = Interceptor.attach(base.add(CAMERA_INPUT_TICK_RVA), {
       return;
     }
 
-    // Ctrl must be held at the instant F8 goes down, matching ctrlPressed() elsewhere.
+    // Ctrl must be held at the instant F8 goes down, matching dualKeyPressed() elsewhere.
     // Testing it on the edge rather than every frame means holding F8 and then tapping
     // Ctrl does not toggle the camera.
     const f8Down = keyDown(VK_F8);
@@ -3599,57 +3604,57 @@ setInterval(function () {
     // Ctrl+F3 shows/hides the overlay and Ctrl+F2 switches compact/full. Moving it
     // needs no hotkey: hold Ctrl and drag the panel. These only flip a flag; the window
     // work itself happens on the main tick.
-    if (ctrlPressed(VK_F3, 'hud')) {
+    if (dualKeyPressed(VK_CONTROL, VK_F3, 'hud')) {
       hudEnabled = !hudEnabled;
       console.log('[HUD] overlay=' + (hudEnabled ? 'ON' : 'OFF'));
     }
     // Ctrl+F1 = object / decoration draw distance. The last visual toggle that had no
     // key. Off by default because pushing decoration distance out can make distant trees
     // disappear: the 3D draw distance outruns the mesh residency behind it.
-    if (ctrlPressed(VK_F1, 'objectBoost')) {
+    if (dualKeyPressed(VK_CONTROL, VK_F1, 'objectBoost')) {
       onMainThread(objectBoostEnabled ? disableObjectBoost : enableObjectBoost);
     }
 
-    if (ctrlPressed(VK_F2, 'hudCompact')) {
+    if (dualKeyPressed(VK_CONTROL, VK_F2, 'hudCompact')) {
       hudCompact = !hudCompact;
       hudLastDrawAt = 0;
       console.log('[HUD] view=' + (hudCompact ? 'compact' : 'full'));
     }
 
-    if (ctrlPressed(VK_F6, 'landOrigin')) {
+    if (dualKeyPressed(VK_CONTROL, VK_F6, 'landOrigin')) {
       setFeature('landorigin', !landOriginForceEnabled);
     }
 
-    if (ctrlPressed(VK_F7, 'texture')) {
+    if (dualKeyPressed(VK_CONTROL, VK_F7, 'texture')) {
       if (textureBoostEnabled) disableTextureBoost();
       else enableTextureBoost();
     }
 
-    if (ctrlPressed(VK_F5, 'world')) {
+    if (dualKeyPressed(VK_CONTROL, VK_F5, 'world')) {
       if (renderBoostEnabled) disableRenderBoost();
       else enableRenderBoost();
     }
 
-    if (ctrlPressed(VK_F9, 'lod')) {
+    if (dualKeyPressed(VK_CONTROL, VK_F9, 'lod')) {
       if (lodBoostEnabled) disableLodBoost();
       else enableLodBoost();
     }
 
-    if (ctrlPressed(VK_F10, 'frill')) {
+    if (dualKeyPressed(VK_CONTROL, VK_F10, 'frill')) {
       if (frillBoostEnabled) disableFrillBoost();
       else enableFrillBoost();
     }
 
-    if (ctrlPressed(VK_F11, 'imposters')) toggleDistantImposters();
+    if (dualKeyPressed(VK_CONTROL, VK_F11, 'imposters')) toggleDistantImposters();
 
-    if (CACHE_FEATURE_ENABLED && ctrlPressed(VK_K, 'photoCache')) {
+    if (CACHE_FEATURE_ENABLED && dualKeyPressed(VK_CONTROL, VK_K, 'photoCache')) {
       setRenderCacheEnabled(!renderCacheEnabled);
     }
 
     // Ctrl+F4 = maximum terrain material quality. Off by default: it rebuilds terrain
     // materials, which is one of the settings that makes the client pause while the
     // engine works through it.
-    if (ctrlPressed(VK_F4, 'terrainQuality')) {
+    if (dualKeyPressed(VK_CONTROL, VK_F4, 'terrainQuality')) {
       onMainThread(function () {
         if (terrainMaxApplied) disableTerrainMax();
         else { setTerrainMax(); verifyStartupFullQuality(); }
@@ -3658,27 +3663,27 @@ setInterval(function () {
 
     // Ctrl+G = thin the grass with distance. The cheapest single thing you can do to
     // the grass without shortening it, so it earns the one remaining sensible key.
-    if (ctrlPressed(VK_G, 'grassFalloff')) {
+    if (dualKeyPressed(VK_CONTROL, VK_G, 'grassFalloff')) {
       setFeature('grassfalloff', !(FRILL_REDUCTION_ENABLED !== 0));
     }
 
     // Ctrl+N = far normal maps: detailed relief versus flat "painted" terrain.
-    if (ctrlPressed(VK_N, 'fnm')) onMainThread(toggleFarNormalMaps);
+    if (dualKeyPressed(VK_CONTROL, VK_N, 'fnm')) onMainThread(toggleFarNormalMaps);
 
     // Ctrl+8 / Ctrl+7 push and pull the high-detail landscape radius, then re-materialize.
-    if (ctrlPressed(VK_8, 'radiusUp')) {
+    if (dualKeyPressed(VK_CONTROL, VK_8, 'radiusUp')) {
       bumpFarRadius(FAR_RADIUS_STEP);
       setTimeout(function () { autoFixMaterialize('(after radius up)'); }, 600);
       setTimeout(function () { autoFixMaterialize('(after radius up)'); }, 2000);
     }
-    if (ctrlPressed(VK_7, 'radiusDown')) bumpFarRadius(-FAR_RADIUS_STEP);
+    if (dualKeyPressed(VK_CONTROL, VK_7, 'radiusDown')) bumpFarRadius(-FAR_RADIUS_STEP);
 
     // 5 / 4 = grass bubble radius (eviction). Smaller = fewer sources behind = better FPS.
-    if (ctrlPressed(VK_5, 'grassEvictUp')) {
+    if (dualKeyPressed(VK_CONTROL, VK_5, 'grassEvictUp')) {
       GRASS_EVICT_RADIUS = Math.min(48, GRASS_EVICT_RADIUS + 2);
       console.log('[GRASS BUBBLE] evict radius=' + GRASS_EVICT_RADIUS + ' blocks (wider = more grass, lower FPS)');
     }
-    if (ctrlPressed(VK_4, 'grassEvictDown')) {
+    if (dualKeyPressed(VK_CONTROL, VK_4, 'grassEvictDown')) {
       GRASS_EVICT_RADIUS = Math.max(4, GRASS_EVICT_RADIUS - 2);
       console.log('[GRASS BUBBLE] evict radius=' + GRASS_EVICT_RADIUS + ' blocks (tighter = better FPS)');
     }
@@ -3691,7 +3696,7 @@ setInterval(function () {
     // F12 = heavy landscape re-stream. Poisons the TextureDetail shadow copy so the
     // engine rebuilds every landscape cell with fresh materials at the current position.
     // Expect a visible hitch: this is a full rebuild, not an incremental update.
-    if (ctrlPressed(VK_F12, 'restream')) {
+    if (dualKeyPressed(VK_CONTROL, VK_F12, 'restream')) {
       try {
         base.add(0x1e4150c).writeU8(textureDetail.readU32() ^ 0xff);
         console.log('[F12] heavy landscape re-stream (every cell is rebuilt)');
