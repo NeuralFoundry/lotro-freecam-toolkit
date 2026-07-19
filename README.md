@@ -166,7 +166,12 @@ doesn't match, nothing below will help you and the script will refuse to start. 
 [Will it even run for you?](#will-it-even-run-for-you) first — it takes ten seconds and
 saves you installing Python for nothing.
 
-### Step 1: Python
+### Step 1: Python (or skip to the automated installer)
+
+There are two ways to get Python and Frida onto the machine: by hand (this step and the
+next), or in one go with **`Install LOTRO Freecam Dependencies.bat`**, covered right
+after Step 2. If you'd rather not run PowerShell scripts, do it by hand below — both end
+up in the same place.
 
 Install **Python 3.8 or newer** from [python.org](https://www.python.org/downloads/).
 
@@ -200,6 +205,38 @@ general-purpose instrumentation toolkit, and process injection is exactly what i
 for a living, so some scanners flag the category. It's a well-known open-source tool
 used widely in security research and app development. Decide for yourself whether you
 want it on your machine.
+
+### Steps 1 & 2, automated
+
+**`Install-Dependencies.ps1`** (launched by double-clicking
+**`Install LOTRO Freecam Dependencies.bat`**) does the same two steps above for you:
+
+- No admin rights needed. Everything installs for your Windows user only (Python under
+  `%LocalAppData%\Programs\Python`, `pip` packages under `%APPDATA%\Python`), so there's
+  no UAC prompt — the trade-off is that if more than one Windows account on the PC plays
+  LOTRO, each account runs this once. (Frida still needs an elevated PowerShell to
+  *attach* to the game afterwards — see [Step 5](#step-5-attach) — that's a separate
+  requirement from installing it.)
+- Checks whether Python 3.8+ is already installed and on PATH; if it is, this step is
+  skipped entirely.
+- If not, installs it using [winget](https://learn.microsoft.com/windows/package-manager/winget/),
+  the package manager Microsoft ships with Windows 10 1809+ and Windows 11 — with
+  `--scope user` so it installs per-user, matching the no-admin design above. winget
+  fetches Python from the same publisher-signed installer python.org hosts and checks it
+  itself, so nothing about the download needs to be hardcoded in this repo.
+- If winget isn't available (older Windows without the "App Installer" package), it falls
+  back to downloading a specific, pinned Python installer directly from `python.org` over
+  HTTPS and checks its SHA-256 against a hash captured from that exact file before running
+  it. If the hash doesn't match, it stops and refuses to run the installer, rather than
+  continuing anyway. Run with the per-user install flag, so this doesn't need admin either.
+- Installs/upgrades `pip`, then installs `frida-tools`, then verifies `frida --version`
+  works.
+- Every step is skipped if it's already satisfied, so it's safe to run again if it fails
+  partway (network hiccup, etc.) — just double-click it again.
+
+As with everything else in this repo: it's a plain, readable script — open
+[Install-Dependencies.ps1](Install-Dependencies.ps1) in a text editor first if you want
+to see exactly what it does before running it.
 
 ### Step 3: get the script
 
