@@ -13,82 +13,353 @@
 // The avatar never moves and nothing is sent to the server. Every change is made to
 // process memory, captured before it is modified, and reverted on detach.
 //
-// Target build: 4808.0070.7360.4034 (lotroclient64.exe, module size 0x22b4000). Every
-// address below is an RVA into that exact binary - see the size guard further down,
-// which refuses to run rather than write to the wrong offsets.
+// Supported builds (lotroclient64.exe), picked automatically from the module size:
+//   4900.0070.8146.4007   module size 0x22bd000   <- current live client
+//   4808.0070.7360.4034   module size 0x22b4000
+// Every address below is an RVA into that exact binary. On top of the size check the
+// script re-reads the first bytes of every function it hooks or calls and refuses to
+// install if any of them has moved, rather than writing to the wrong offsets.
 'use strict';
 
 const MODULE_NAME = 'lotroclient64.exe';
-const EXPECTED_SIZE = 0x22b4000;
-const POSITION_UPDATE_FUNCTION_RVA = 0x54dfa0;
-const WORLD_CELL_PRIMARY_RVA = 0x566f10;
-const WORLD_CELL_SECONDARY_RVA = 0x5670c0;
-const WORLD_CELL_ENTER_RVA = 0x567300;
-const FRILL_CENTER_UPDATE_RVA = 0x956470;
-const FRILL_LOADER_UPDATE_RVA = 0x954310;
-const FRILL_SECTOR_REFRESH_RVA = 0x9556a0;
-const TERRAIN_TILE_REQUEST_RVA = 0x4ffcf0;
-const RESOURCE_UNWRAP_RVA = 0x34b460;
-const RESOURCE_KEY_TO_ID_RVA = 0x441100;
-const RESOURCE_HANDLE_INIT_RVA = 0x5e7f50;
-const POSITION_TO_RESOURCE_KEY_RVA = 0x89fe80;
-const SERVICE_LOCATOR_GET_RVA = 0x1155fe0;
-const SERVICE_LOCATOR_FIND_RVA = 0x1155f50;
-const LAND_PROVIDER_SERVICE_IID_RVA = 0x155cfd0;
-const LAND_PROVIDER_IID_RVA = 0x155cfc0;
-const PROVIDER_REQUEST_RVA = 0x506a40;
-const PROVIDER_COMPLETION_RVA = 0x4fe890;
-const REQUEST_DESCRIPTOR_INIT_RVA = 0x58e010;
-const REQUEST_DESCRIPTOR_DESTROY_RVA = 0x58e6b0;
-const REQUEST_STAMP_THUNK_RVA = 0x749200;
-const LAND_RESOURCE_BUILD_RVA = 0x995720;
-const LAND_RESIDENCY_UPDATE_RVA = 0x995950;
-const LAND_RESIDENCY_LIMIT_PATCH_RVA = 0x995a16;
-const PLAYER_POSITION_COPY_RVA = 0x1a0c1f0;
-const SMARTBOX_GLOBAL_RVA = 0x1e492c0;
-const MAIN_THREAD_TICK_RVA = 0x971df0;
-const SMARTBOX_LAND_UPDATE_RVA = 0x96da90;
-const CACHED_LAND_ORIGIN_RVA = 0x1a0c780;
-const FAR_RADIUS_APPLY_RVA = 0x96cc80;
-const CONSOLE_STRING_CONSTRUCT_RVA = 0x3051a0;
-const CONSOLE_DISPATCH_RVA = 0x3fcb60;
-const GRAPHICS_RESOURCE_PURGE_BUDGET_RVA = 0x862910;
-const ASYNC_CACHE_CONFIG_RESOLVE_RVA = 0x5e86f0;
-const ASYNC_CACHE_REGISTRY_RVA = 0x19f5478;
-const ASYNC_CACHE_VTABLE_RVA = 0x14de980;
-const OBJECT_DISTANCE_FUNCTION_RVA = 0x8f7ab0;
-const STATIC_PVS_FLAG_RVA = 0x1a0ac51;
-const ALLOW_LODS_FLAG_RVA = 0x1a0ac52;
-const MATERIAL_DETAIL_RVA = 0x1a08ffc;
-const MODEL_DETAIL_RVA = 0x1a09000;
-const OBJECT_DRAW_DISTANCE_RVA = 0x1a0900c;
-const LANDSCAPE_DRAW_DISTANCE_RVA = 0x1a09010;
-const DISTANT_IMPOSTERS_RVA = 0x1a09014;
-const FRILL_DISTANCE_QUALITY_RVA = 0x1a09018;
-const FRILL_DENSITY_RVA = 0x1a0901c;
-const FRILL_TERRAIN_COLOR_RVA = 0x1a09020;
-const LANDSCAPE_STATIC_OBJECT_SHADOWS_RVA = 0x1a09024;
-const LANDSCAPE_LIGHTING_QUALITY_RVA = 0x1a09028;
-const FAR_LANDSCAPE_NORMAL_MAPS_RVA = 0x1a0902c;
-const FRILL_ENGINE_GLOBAL_RVA = 0x1e46470;
-const FRILL_TIME_BUDGET_MULTIPLIER_RVA = 0x156c404;
-const TEXTURE_FILTERING_RVA = 0x1a08fe4;
-const ANISOTROPIC_QUALITY_RVA = 0x1a08fe8;
-const TEXTURE_DETAIL_RVA = 0x1a08ff8;
-const GRAPHICS_MEMORY_USAGE_RVA = 0x1a09094;
-const TEXTURE_FILTER_DIRTY_RVA = 0x1e41164;
-const MIP_BIAS_FUNCTION_RVA = 0x860ff0;
-const NEAR_FAR_SEAM_BLEND_RVA = 0x1a09075;
-const CAMERA_INPUT_TICK_RVA = 0x973b00;
-const PUSH_CAMERA_RVA = 0x9732f0;
-const POP_CAMERA_RVA = 0x97c190;
-const MAKE_FPS_SLOW_RVA = 0x97ab70;
-const FLIGHT_MOVE_FORWARD_RVA = 0x97b1f0;
-const FLIGHT_MOVE_STRAFE_RVA = 0x97b370;
-const FLIGHT_MOVE_VERTICAL_RVA = 0x97b4f0;
-const FLIGHT_VTABLE_RVA = 0x1568d40;
-const FLIGHT_USE_PHYSICS_RVA = 0x1a0c7ea;
-const FLIGHT_MOVE_SPEED_RVA = 0x1a0c89c;
+
+// The 4900 column was derived from the 4808 one by masked-signature transfer (rip
+// displacements and rel32 branch targets wildcarded), then confirmed
+// instruction-by-instruction across the full function body. Data addresses were
+// resolved through their referencing instructions, cross-checked across every xref
+// site; all sites agreed on every address.
+const BUILDS = {
+  0x22bd000: {
+    name: '4900.0070.8146.4007',
+    rva: {
+      POSITION_UPDATE_FUNCTION: 0x54e470,
+      WORLD_CELL_PRIMARY: 0x5673e0,
+      WORLD_CELL_SECONDARY: 0x567590,
+      WORLD_CELL_ENTER: 0x5677d0,
+      FRILL_CENTER_UPDATE: 0x959560,
+      FRILL_LOADER_UPDATE: 0x957450,
+      FRILL_SECTOR_REFRESH: 0x958790,
+      TERRAIN_TILE_REQUEST: 0x500150,
+      RESOURCE_UNWRAP: 0x34b4c0,
+      RESOURCE_KEY_TO_ID: 0x441560,
+      RESOURCE_HANDLE_INIT: 0x5e8420,
+      POSITION_TO_RESOURCE_KEY: 0x8a2dd0,
+      SERVICE_LOCATOR_GET: 0x115d620,
+      SERVICE_LOCATOR_FIND: 0x115d590,
+      PROVIDER_REQUEST: 0x506eb0,
+      PROVIDER_COMPLETION: 0x4fecf0,
+      REQUEST_DESCRIPTOR_INIT: 0x58e4e0,
+      REQUEST_DESCRIPTOR_DESTROY: 0x58eb80,
+      REQUEST_STAMP_THUNK: 0x749db0,
+      LAND_RESOURCE_BUILD: 0x998810,
+      LAND_RESIDENCY_UPDATE: 0x998a40,
+      LAND_RESIDENCY_LIMIT_PATCH: 0x998b06,
+      MAIN_THREAD_TICK: 0x974ee0,
+      SMARTBOX_LAND_UPDATE: 0x970b80,
+      FAR_RADIUS_APPLY: 0x96fd70,
+      CONSOLE_STRING_CONSTRUCT: 0x305200,
+      CONSOLE_DISPATCH: 0x3fcc40,
+      GRAPHICS_RESOURCE_PURGE_BUDGET: 0x8634d0,
+      ASYNC_CACHE_CONFIG_RESOLVE: 0x5e8bc0,
+      OBJECT_DISTANCE_FUNCTION: 0x8fabc0,
+      MIP_BIAS_FUNCTION: 0x861bb0,
+      CAMERA_INPUT_TICK: 0x976bf0,
+      PUSH_CAMERA: 0x9763e0,
+      POP_CAMERA: 0x97f280,
+      MAKE_FPS_SLOW: 0x97dc60,
+      FLIGHT_MOVE_FORWARD: 0x97e2e0,
+      FLIGHT_MOVE_STRAFE: 0x97e460,
+      FLIGHT_MOVE_VERTICAL: 0x97e5e0,
+      T_SET_BYTE: 0x3ff790,
+      T_SET_INT: 0x3ff510,
+      OBJ_WRITER_A: 0x93fb36,
+      OBJ_WRITER_B: 0x93ff4d,
+      LAND_PROVIDER_SERVICE_IID: 0x1564460,
+      LAND_PROVIDER_IID: 0x1564450,
+      PLAYER_POSITION_COPY: 0x1a151f0,
+      SMARTBOX_GLOBAL: 0x1e52bb0,
+      CACHED_LAND_ORIGIN: 0x1a15780,
+      ASYNC_CACHE_REGISTRY: 0x19fe478,
+      ASYNC_CACHE_VTABLE: 0x14e5980,
+      STATIC_PVS_FLAG: 0x1a13c51,
+      ALLOW_LODS_FLAG: 0x1a13c52,
+      MATERIAL_DETAIL: 0x1a11ffc,
+      MODEL_DETAIL: 0x1a12000,
+      OBJECT_DRAW_DISTANCE: 0x1a1200c,
+      LANDSCAPE_DRAW_DISTANCE: 0x1a12010,
+      DISTANT_IMPOSTERS: 0x1a12014,
+      FRILL_DISTANCE_QUALITY: 0x1a12018,
+      FRILL_DENSITY: 0x1a1201c,
+      FRILL_TERRAIN_COLOR: 0x1a12020,
+      LANDSCAPE_STATIC_OBJECT_SHADOWS: 0x1a12024,
+      LANDSCAPE_LIGHTING_QUALITY: 0x1a12028,
+      FAR_LANDSCAPE_NORMAL_MAPS: 0x1a1202c,
+      FRILL_ENGINE_GLOBAL: 0x1e4fd60,
+      FRILL_TIME_BUDGET_MULTIPLIER: 0x15738a4,
+      TEXTURE_FILTERING: 0x1a11fe4,
+      ANISOTROPIC_QUALITY: 0x1a11fe8,
+      TEXTURE_DETAIL: 0x1a11ff8,
+      GRAPHICS_MEMORY_USAGE: 0x1a12094,
+      TEXTURE_FILTER_DIRTY: 0x1e4aa54,
+      TEXTURE_DETAIL_MIRROR: 0x1e4adfc,
+      NEAR_FAR_SEAM_BLEND: 0x1a12075,
+      FLIGHT_VTABLE: 0x15701e0,
+      FLIGHT_USE_PHYSICS: 0x1a157ea,
+      FLIGHT_MOVE_SPEED: 0x1a1589c,
+      LAND_RESOURCE_KEY_VTABLE: 0x14df560,
+      RENDER_DEVICE_PTR: 0x1e505d0,
+      VRAM_MB_SCALE: 0x1557e88,
+      GFX_RESOURCE_LIST: 0x1e4ad20,
+      GFX_RESOURCE_COUNT: 0x1e4ad2c,
+      OBJ_MULT: 0x1a13d2c,
+      T_D_MD: 0x14deb08,
+      T_D_MODEL: 0x14deb10,
+      T_D_OBJECT_DISTANCE: 0x14deb28,
+      T_D_LANDSCAPE_DISTANCE: 0x14deb30,
+      T_D_FRILL_COLOR: 0x14deb50,
+      T_D_STATIC_SHADOWS: 0x14deb58,
+      T_D_LQ: 0x14deb60,
+      T_D_FNM: 0x14deb68,
+      T_D_SEAM: 0x14dec20,
+    },
+    frill: {
+      density: 0x78,
+      distance: 0x7c,
+      depthTransitions: 0xb4,
+      preCache: 0xb8,
+      depthFade: 0xf8,
+      reductionDistance: 0xfc,
+      reductionEnabled: 0x100,
+      playerBlend: 0x104,
+      hashLoaded: 0x74,
+      loadRing: 0x80,
+      loadIndex: 0x84,
+      activeDraw: 0xd4,
+      // Diagnostic only. 4808 read the loader's grid centre at +0x28/+0x2c, but 4900
+      // rebuilt the 0x24..0x58 window (a pointer and three new words moved in), so
+      // those two dwords have no honest counterpart here. Left null rather than
+      // printing whatever happens to sit at the old offsets.
+      centerX: null,
+      centerY: null,
+    }
+  },
+  0x22b4000: {
+    name: '4808.0070.7360.4034',
+    rva: {
+      POSITION_UPDATE_FUNCTION: 0x54dfa0,
+      WORLD_CELL_PRIMARY: 0x566f10,
+      WORLD_CELL_SECONDARY: 0x5670c0,
+      WORLD_CELL_ENTER: 0x567300,
+      FRILL_CENTER_UPDATE: 0x956470,
+      FRILL_LOADER_UPDATE: 0x954310,
+      FRILL_SECTOR_REFRESH: 0x9556a0,
+      TERRAIN_TILE_REQUEST: 0x4ffcf0,
+      RESOURCE_UNWRAP: 0x34b460,
+      RESOURCE_KEY_TO_ID: 0x441100,
+      RESOURCE_HANDLE_INIT: 0x5e7f50,
+      POSITION_TO_RESOURCE_KEY: 0x89fe80,
+      SERVICE_LOCATOR_GET: 0x1155fe0,
+      SERVICE_LOCATOR_FIND: 0x1155f50,
+      PROVIDER_REQUEST: 0x506a40,
+      PROVIDER_COMPLETION: 0x4fe890,
+      REQUEST_DESCRIPTOR_INIT: 0x58e010,
+      REQUEST_DESCRIPTOR_DESTROY: 0x58e6b0,
+      REQUEST_STAMP_THUNK: 0x749200,
+      LAND_RESOURCE_BUILD: 0x995720,
+      LAND_RESIDENCY_UPDATE: 0x995950,
+      LAND_RESIDENCY_LIMIT_PATCH: 0x995a16,
+      MAIN_THREAD_TICK: 0x971df0,
+      SMARTBOX_LAND_UPDATE: 0x96da90,
+      FAR_RADIUS_APPLY: 0x96cc80,
+      CONSOLE_STRING_CONSTRUCT: 0x3051a0,
+      CONSOLE_DISPATCH: 0x3fcb60,
+      GRAPHICS_RESOURCE_PURGE_BUDGET: 0x862910,
+      ASYNC_CACHE_CONFIG_RESOLVE: 0x5e86f0,
+      OBJECT_DISTANCE_FUNCTION: 0x8f7ab0,
+      MIP_BIAS_FUNCTION: 0x860ff0,
+      CAMERA_INPUT_TICK: 0x973b00,
+      PUSH_CAMERA: 0x9732f0,
+      POP_CAMERA: 0x97c190,
+      MAKE_FPS_SLOW: 0x97ab70,
+      FLIGHT_MOVE_FORWARD: 0x97b1f0,
+      FLIGHT_MOVE_STRAFE: 0x97b370,
+      FLIGHT_MOVE_VERTICAL: 0x97b4f0,
+      T_SET_BYTE: 0x3ff6b0,
+      T_SET_INT: 0x3ff430,
+      OBJ_WRITER_A: 0x93ca26,
+      OBJ_WRITER_B: 0x93ce3d,
+      LAND_PROVIDER_SERVICE_IID: 0x155cfd0,
+      LAND_PROVIDER_IID: 0x155cfc0,
+      PLAYER_POSITION_COPY: 0x1a0c1f0,
+      SMARTBOX_GLOBAL: 0x1e492c0,
+      CACHED_LAND_ORIGIN: 0x1a0c780,
+      ASYNC_CACHE_REGISTRY: 0x19f5478,
+      ASYNC_CACHE_VTABLE: 0x14de980,
+      STATIC_PVS_FLAG: 0x1a0ac51,
+      ALLOW_LODS_FLAG: 0x1a0ac52,
+      MATERIAL_DETAIL: 0x1a08ffc,
+      MODEL_DETAIL: 0x1a09000,
+      OBJECT_DRAW_DISTANCE: 0x1a0900c,
+      LANDSCAPE_DRAW_DISTANCE: 0x1a09010,
+      DISTANT_IMPOSTERS: 0x1a09014,
+      FRILL_DISTANCE_QUALITY: 0x1a09018,
+      FRILL_DENSITY: 0x1a0901c,
+      FRILL_TERRAIN_COLOR: 0x1a09020,
+      LANDSCAPE_STATIC_OBJECT_SHADOWS: 0x1a09024,
+      LANDSCAPE_LIGHTING_QUALITY: 0x1a09028,
+      FAR_LANDSCAPE_NORMAL_MAPS: 0x1a0902c,
+      FRILL_ENGINE_GLOBAL: 0x1e46470,
+      FRILL_TIME_BUDGET_MULTIPLIER: 0x156c404,
+      TEXTURE_FILTERING: 0x1a08fe4,
+      ANISOTROPIC_QUALITY: 0x1a08fe8,
+      TEXTURE_DETAIL: 0x1a08ff8,
+      GRAPHICS_MEMORY_USAGE: 0x1a09094,
+      TEXTURE_FILTER_DIRTY: 0x1e41164,
+      TEXTURE_DETAIL_MIRROR: 0x1e4150c,
+      NEAR_FAR_SEAM_BLEND: 0x1a09075,
+      FLIGHT_VTABLE: 0x1568d40,
+      FLIGHT_USE_PHYSICS: 0x1a0c7ea,
+      FLIGHT_MOVE_SPEED: 0x1a0c89c,
+      LAND_RESOURCE_KEY_VTABLE: 0x14d8560,
+      RENDER_DEVICE_PTR: 0x1e46ce0,
+      VRAM_MB_SCALE: 0x15509e8,
+      GFX_RESOURCE_LIST: 0x1e41430,
+      GFX_RESOURCE_COUNT: 0x1e4143c,
+      OBJ_MULT: 0x1a0ad2c,
+      T_D_MD: 0x14d7b08,
+      T_D_MODEL: 0x14d7b10,
+      T_D_OBJECT_DISTANCE: 0x14d7b28,
+      T_D_LANDSCAPE_DISTANCE: 0x14d7b30,
+      T_D_FRILL_COLOR: 0x14d7b50,
+      T_D_STATIC_SHADOWS: 0x14d7b58,
+      T_D_LQ: 0x14d7b60,
+      T_D_FNM: 0x14d7b68,
+      T_D_SEAM: 0x14d7c20,
+    },
+    frill: {
+      density: 0x60,
+      distance: 0x64,
+      depthTransitions: 0x9c,
+      preCache: 0xa0,
+      depthFade: 0xe0,
+      reductionDistance: 0xe4,
+      reductionEnabled: 0xe8,
+      playerBlend: 0xec,
+      hashLoaded: 0x5c,
+      loadRing: 0x68,
+      loadIndex: 0x6c,
+      activeDraw: 0xbc,
+      centerX: 0x28,
+      centerY: 0x2c,
+    }
+  },
+};
+
+const mod = Process.getModuleByName(MODULE_NAME);
+const build = BUILDS[mod.size];
+if (build === undefined) {
+  throw new Error(
+    'Unsupported LOTRO build: module size 0x' + mod.size.toString(16) +
+    '. Known: ' + Object.keys(BUILDS).map(function (s) {
+      return '0x' + Number(s).toString(16) + ' (' + BUILDS[s].name + ')';
+    }).join(', ')
+  );
+}
+const A = build.rva;
+// FrillEngine field offsets. The struct grew by 0x18 bytes ahead of +0x60 in 4900, so
+// every field this script touches moved with it - see FrillEngine's own constructor
+// and its quality-apply function, which write these same slots.
+const FRILL = build.frill;
+
+const POSITION_UPDATE_FUNCTION_RVA = A.POSITION_UPDATE_FUNCTION;
+const WORLD_CELL_PRIMARY_RVA = A.WORLD_CELL_PRIMARY;
+const WORLD_CELL_SECONDARY_RVA = A.WORLD_CELL_SECONDARY;
+const WORLD_CELL_ENTER_RVA = A.WORLD_CELL_ENTER;
+const FRILL_CENTER_UPDATE_RVA = A.FRILL_CENTER_UPDATE;
+const FRILL_LOADER_UPDATE_RVA = A.FRILL_LOADER_UPDATE;
+const FRILL_SECTOR_REFRESH_RVA = A.FRILL_SECTOR_REFRESH;
+const TERRAIN_TILE_REQUEST_RVA = A.TERRAIN_TILE_REQUEST;
+const RESOURCE_UNWRAP_RVA = A.RESOURCE_UNWRAP;
+const RESOURCE_KEY_TO_ID_RVA = A.RESOURCE_KEY_TO_ID;
+const RESOURCE_HANDLE_INIT_RVA = A.RESOURCE_HANDLE_INIT;
+const POSITION_TO_RESOURCE_KEY_RVA = A.POSITION_TO_RESOURCE_KEY;
+const SERVICE_LOCATOR_GET_RVA = A.SERVICE_LOCATOR_GET;
+const SERVICE_LOCATOR_FIND_RVA = A.SERVICE_LOCATOR_FIND;
+const PROVIDER_REQUEST_RVA = A.PROVIDER_REQUEST;
+const PROVIDER_COMPLETION_RVA = A.PROVIDER_COMPLETION;
+const REQUEST_DESCRIPTOR_INIT_RVA = A.REQUEST_DESCRIPTOR_INIT;
+const REQUEST_DESCRIPTOR_DESTROY_RVA = A.REQUEST_DESCRIPTOR_DESTROY;
+const REQUEST_STAMP_THUNK_RVA = A.REQUEST_STAMP_THUNK;
+const LAND_RESOURCE_BUILD_RVA = A.LAND_RESOURCE_BUILD;
+const LAND_RESIDENCY_UPDATE_RVA = A.LAND_RESIDENCY_UPDATE;
+const LAND_RESIDENCY_LIMIT_PATCH_RVA = A.LAND_RESIDENCY_LIMIT_PATCH;
+const MAIN_THREAD_TICK_RVA = A.MAIN_THREAD_TICK;
+const SMARTBOX_LAND_UPDATE_RVA = A.SMARTBOX_LAND_UPDATE;
+const FAR_RADIUS_APPLY_RVA = A.FAR_RADIUS_APPLY;
+const CONSOLE_STRING_CONSTRUCT_RVA = A.CONSOLE_STRING_CONSTRUCT;
+const CONSOLE_DISPATCH_RVA = A.CONSOLE_DISPATCH;
+const GRAPHICS_RESOURCE_PURGE_BUDGET_RVA = A.GRAPHICS_RESOURCE_PURGE_BUDGET;
+const ASYNC_CACHE_CONFIG_RESOLVE_RVA = A.ASYNC_CACHE_CONFIG_RESOLVE;
+const OBJECT_DISTANCE_FUNCTION_RVA = A.OBJECT_DISTANCE_FUNCTION;
+const MIP_BIAS_FUNCTION_RVA = A.MIP_BIAS_FUNCTION;
+const CAMERA_INPUT_TICK_RVA = A.CAMERA_INPUT_TICK;
+const PUSH_CAMERA_RVA = A.PUSH_CAMERA;
+const POP_CAMERA_RVA = A.POP_CAMERA;
+const MAKE_FPS_SLOW_RVA = A.MAKE_FPS_SLOW;
+const FLIGHT_MOVE_FORWARD_RVA = A.FLIGHT_MOVE_FORWARD;
+const FLIGHT_MOVE_STRAFE_RVA = A.FLIGHT_MOVE_STRAFE;
+const FLIGHT_MOVE_VERTICAL_RVA = A.FLIGHT_MOVE_VERTICAL;
+const T_SET_BYTE_RVA = A.T_SET_BYTE;
+const T_SET_INT_RVA = A.T_SET_INT;
+const OBJ_WRITER_A_RVA = A.OBJ_WRITER_A;
+const OBJ_WRITER_B_RVA = A.OBJ_WRITER_B;
+const LAND_PROVIDER_SERVICE_IID_RVA = A.LAND_PROVIDER_SERVICE_IID;
+const LAND_PROVIDER_IID_RVA = A.LAND_PROVIDER_IID;
+const PLAYER_POSITION_COPY_RVA = A.PLAYER_POSITION_COPY;
+const SMARTBOX_GLOBAL_RVA = A.SMARTBOX_GLOBAL;
+const CACHED_LAND_ORIGIN_RVA = A.CACHED_LAND_ORIGIN;
+const ASYNC_CACHE_REGISTRY_RVA = A.ASYNC_CACHE_REGISTRY;
+const ASYNC_CACHE_VTABLE_RVA = A.ASYNC_CACHE_VTABLE;
+const STATIC_PVS_FLAG_RVA = A.STATIC_PVS_FLAG;
+const ALLOW_LODS_FLAG_RVA = A.ALLOW_LODS_FLAG;
+const MATERIAL_DETAIL_RVA = A.MATERIAL_DETAIL;
+const MODEL_DETAIL_RVA = A.MODEL_DETAIL;
+const OBJECT_DRAW_DISTANCE_RVA = A.OBJECT_DRAW_DISTANCE;
+const LANDSCAPE_DRAW_DISTANCE_RVA = A.LANDSCAPE_DRAW_DISTANCE;
+const DISTANT_IMPOSTERS_RVA = A.DISTANT_IMPOSTERS;
+const FRILL_DISTANCE_QUALITY_RVA = A.FRILL_DISTANCE_QUALITY;
+const FRILL_DENSITY_RVA = A.FRILL_DENSITY;
+const FRILL_TERRAIN_COLOR_RVA = A.FRILL_TERRAIN_COLOR;
+const LANDSCAPE_STATIC_OBJECT_SHADOWS_RVA = A.LANDSCAPE_STATIC_OBJECT_SHADOWS;
+const LANDSCAPE_LIGHTING_QUALITY_RVA = A.LANDSCAPE_LIGHTING_QUALITY;
+const FAR_LANDSCAPE_NORMAL_MAPS_RVA = A.FAR_LANDSCAPE_NORMAL_MAPS;
+const FRILL_ENGINE_GLOBAL_RVA = A.FRILL_ENGINE_GLOBAL;
+const FRILL_TIME_BUDGET_MULTIPLIER_RVA = A.FRILL_TIME_BUDGET_MULTIPLIER;
+const TEXTURE_FILTERING_RVA = A.TEXTURE_FILTERING;
+const ANISOTROPIC_QUALITY_RVA = A.ANISOTROPIC_QUALITY;
+const TEXTURE_DETAIL_RVA = A.TEXTURE_DETAIL;
+const GRAPHICS_MEMORY_USAGE_RVA = A.GRAPHICS_MEMORY_USAGE;
+const TEXTURE_FILTER_DIRTY_RVA = A.TEXTURE_FILTER_DIRTY;
+const TEXTURE_DETAIL_MIRROR_RVA = A.TEXTURE_DETAIL_MIRROR;
+const NEAR_FAR_SEAM_BLEND_RVA = A.NEAR_FAR_SEAM_BLEND;
+const FLIGHT_VTABLE_RVA = A.FLIGHT_VTABLE;
+const FLIGHT_USE_PHYSICS_RVA = A.FLIGHT_USE_PHYSICS;
+const FLIGHT_MOVE_SPEED_RVA = A.FLIGHT_MOVE_SPEED;
+const LAND_RESOURCE_KEY_VTABLE_RVA = A.LAND_RESOURCE_KEY_VTABLE;
+const RENDER_DEVICE_PTR_RVA = A.RENDER_DEVICE_PTR;
+const VRAM_MB_SCALE_RVA = A.VRAM_MB_SCALE;
+const GFX_RESOURCE_LIST_RVA = A.GFX_RESOURCE_LIST;
+const GFX_RESOURCE_COUNT_RVA = A.GFX_RESOURCE_COUNT;
+const OBJ_MULT_RVA = A.OBJ_MULT;
+const T_D_MD_RVA = A.T_D_MD;
+const T_D_MODEL_RVA = A.T_D_MODEL;
+const T_D_OBJECT_DISTANCE_RVA = A.T_D_OBJECT_DISTANCE;
+const T_D_LANDSCAPE_DISTANCE_RVA = A.T_D_LANDSCAPE_DISTANCE;
+const T_D_FRILL_COLOR_RVA = A.T_D_FRILL_COLOR;
+const T_D_STATIC_SHADOWS_RVA = A.T_D_STATIC_SHADOWS;
+const T_D_LQ_RVA = A.T_D_LQ;
+const T_D_FNM_RVA = A.T_D_FNM;
+const T_D_SEAM_RVA = A.T_D_SEAM;
 
 // Landscape topology uses 16 sectors per land block. The distant landscape and
 // grass/frill systems have independent useful limits, so keep their radii separate.
@@ -182,7 +453,6 @@ let grassEvictions = 0;
 // The camera starts off deliberately: attaching should change nothing about how the
 // game plays until you ask for it. Press F8 in game, or call flight(true).
 const AUTO_ENABLE_FREECAM = false;
-const LAND_RESOURCE_KEY_VTABLE_RVA = 0x14d8560;
 let DIRECT_SOURCE_INTERVAL_MS = 70;    // Streaming cadence: fill quickly, then go idle.
 let DIRECT_SOURCE_PER_PASS = 8;
 let PROVIDER_SURFACE_RADIUS_BLOCKS = 16;   // must match the grass draw radius above
@@ -271,15 +541,90 @@ const VK_F1 = 0x70;   // object / decoration draw distance
 const VK_F3 = 0x72;   // oyun ici HUD ac/kapa
 const VK_F2 = 0x71;   // HUD: compact / full view
 
-const mod = Process.getModuleByName(MODULE_NAME);
-if (mod.size !== EXPECTED_SIZE) {
+const base = mod.base;
+
+// First bytes of every function this script hooks, calls or patches. '??' marks a
+// byte that is a rip displacement or a rel32 branch target - those move with the
+// build, the rest do not. They are identical on both supported builds.
+//
+// This is the check that matters. If a client patch shifts these functions, the
+// address table quietly points into the middle of something else, and hooking or
+// calling through it takes the client down. Reading the prologue back first turns
+// that into a refusal to start, with nothing hooked and nothing written.
+const PROLOGUE = {
+  POSITION_UPDATE_FUNCTION: '48 89 5c 24 08 55 48 8b ec 48 83 ec 60',
+  WORLD_CELL_PRIMARY: '48 89 5c 24 10 48 89 6c 24 20',
+  WORLD_CELL_SECONDARY: '48 89 5c 24 10 55 56 57 41 54',
+  WORLD_CELL_ENTER: '48 89 5c 24 10 48 89 74 24 20',
+  FRILL_CENTER_UPDATE: '48 8b c4 48 89 58 10 55 56 57',
+  FRILL_LOADER_UPDATE: '48 89 5c 24 08 55 56 57 41 54',
+  FRILL_SECTOR_REFRESH: '48 89 5c 24 18 4c 89 4c 24 20',
+  TERRAIN_TILE_REQUEST: '48 8b 89 e0 00 00 00 48 85 c9',
+  RESOURCE_UNWRAP: '4c 8b c1 48 8b 0d ?? ?? ?? ??',
+  RESOURCE_KEY_TO_ID: '48 89 5c 24 08 48 89 74 24 18',
+  RESOURCE_HANDLE_INIT: '40 53 48 83 ec 20 44 89 01 48 8b d9',
+  POSITION_TO_RESOURCE_KEY: '48 89 5c 24 08 48 89 6c 24 10',
+  SERVICE_LOCATOR_GET: '48 83 ec 28 80 3d ?? ?? ?? ?? 00',
+  SERVICE_LOCATOR_FIND: '40 53 48 83 ec 20 49 c7 01 00 00 00 00',
+  PROVIDER_REQUEST: '48 89 5c 24 08 48 89 6c 24 10',
+  PROVIDER_COMPLETION: '48 89 5c 24 08 48 89 74 24 20',
+  REQUEST_DESCRIPTOR_INIT: '48 8d 05 ?? ?? ?? ?? 48 89 01',
+  REQUEST_DESCRIPTOR_DESTROY: '48 89 5c 24 08 57 48 83 ec 20',
+  REQUEST_STAMP_THUNK: '48 8b 0d ?? ?? ?? ?? 48 81 c1 f0 00 00 00',
+  LAND_RESOURCE_BUILD: '48 89 5c 24 08 48 89 74 24 10',
+  LAND_RESIDENCY_UPDATE: '48 89 5c 24 08 48 89 6c 24 18',
+  LAND_RESIDENCY_LIMIT_PATCH: '41 83 fa 04 0f 86 ?? ?? ?? ??',
+  MAIN_THREAD_TICK: '48 8b c4 48 89 58 10 44 88 40 18',
+  SMARTBOX_LAND_UPDATE: '48 8b c4 48 89 58 08 48 89 70 10',
+  FAR_RADIUS_APPLY: '40 53 48 83 ec 20 48 8b 1d ?? ?? ?? ??',
+  CONSOLE_STRING_CONSTRUCT: '48 89 5c 24 20 57 48 83 ec 20',
+  CONSOLE_DISPATCH: '40 55 53 56 57 41 54 41 56 41 57',
+  GRAPHICS_RESOURCE_PURGE_BUDGET: '40 55 41 56 48 83 ec 58 b8 00 00 00 80',
+  ASYNC_CACHE_CONFIG_RESOLVE: '40 53 48 83 ec 20 65 48 8b 04 25 58 00 00 00',
+  OBJECT_DISTANCE_FUNCTION: '80 3d ?? ?? ?? ?? 00 8b 05 ?? ?? ?? ??',
+  MIP_BIAS_FUNCTION: '8b 05 ?? ?? ?? ?? 0f 57 c0 83 f8 02',
+  CAMERA_INPUT_TICK: '48 8b c4 55 53 56 57 41 54 41 56',
+  PUSH_CAMERA: '48 89 5c 24 08 57 48 81 ec b0 00 00 00',
+  POP_CAMERA: '48 89 5c 24 10 48 89 6c 24 18',
+  MAKE_FPS_SLOW: '40 55 53 56 57 48 8b ec 48 83 ec 48',
+  FLIGHT_MOVE_FORWARD: '40 53 48 81 ec 80 00 00 00 f3 0f 10 05 ?? ?? ??',
+  FLIGHT_MOVE_STRAFE: '40 53 48 81 ec 80 00 00 00 f3 0f 10 05 ?? ?? ??',
+  FLIGHT_MOVE_VERTICAL: '40 53 48 81 ec 80 00 00 00 f3 0f 10 05 ?? ?? ??',
+  T_SET_BYTE: '48 89 5c 24 08 48 89 74 24 10 57 48 83 ec',
+  T_SET_INT: '48 89 5c 24 08 48 89 74 24 10 57 48 83 ec',
+  OBJ_WRITER_A: 'f3 0f 11 05 ?? ?? ?? ??',
+  OBJ_WRITER_B: 'f3 0f 11 0d ?? ?? ?? ??',
+};
+
+const prologueMismatches = Object.keys(PROLOGUE).filter(function (name) {
+  const parts = PROLOGUE[name].split(' ');
+  let bytes;
+  try {
+    bytes = new Uint8Array(base.add(A[name]).readByteArray(parts.length));
+  } catch (_) {
+    return true;
+  }
+  const seen = [];
+  let ok = true;
+  for (let i = 0; i < parts.length; i++) {
+    seen.push(('0' + bytes[i].toString(16)).slice(-2));
+    if (parts[i] !== '??' && bytes[i] !== parseInt(parts[i], 16)) ok = false;
+  }
+  if (!ok) {
+    console.log('[freecam] ' + name + ' @ +0x' + A[name].toString(16) +
+      '\n           expected ' + PROLOGUE[name] +
+      '\n           found    ' + seen.join(' '));
+  }
+  return !ok;
+});
+if (prologueMismatches.length > 0) {
   throw new Error(
-    'Unsupported LOTRO build: 0x' + mod.size.toString(16) +
-    ', expected 0x' + EXPECTED_SIZE.toString(16)
+    'Refusing to install: ' + prologueMismatches.length + ' function(s) do not match ' +
+    'the ' + build.name + ' address table (' + prologueMismatches.join(', ') + '). ' +
+    'The client has changed since these offsets were derived - nothing was hooked, ' +
+    'nothing was patched, and the game is untouched.'
   );
 }
-
-const base = mod.base;
 const positionUpdateFunction = base.add(POSITION_UPDATE_FUNCTION_RVA);
 const frillCenterUpdate = base.add(FRILL_CENTER_UPDATE_RVA);
 const frillLoaderUpdate = base.add(FRILL_LOADER_UPDATE_RVA);
@@ -391,11 +736,7 @@ const originalFrillTimeBudgetMultiplier = frillTimeBudgetMultiplier.readFloat();
 // a fake value into the inactive D3D9 device. Graphics.MemoryUsage=2.0 is the real
 // common engine maximum. The 7.25 GiB photo budget below is native asset RAM; DX11
 // may still evict and re-upload remote copies. Telemetry never auto-purges.
-const RENDER_DEVICE_PTR_RVA = 0x1e46ce0;
 const RENDER_DEVICE_TOTAL_VRAM_OFF = 0x2208;
-const VRAM_MB_SCALE_RVA = 0x15509e8;
-const GFX_RESOURCE_LIST_RVA = 0x1e41430;
-const GFX_RESOURCE_COUNT_RVA = 0x1e4143c;
 const VRAM_RES_REMOTE_STATE_OFF = 0x08;
 const VRAM_RES_REMOTE_BYTES_OFF = 0x20;
 const VRAM_RES_SYSTEM_BYTES_OFF = 0x24;
@@ -849,12 +1190,12 @@ Interceptor.attach(mipBiasFunction, {
 // ============================================================
 // Terrain material quality and object/decoration draw distance.
 // ============================================================
-const T_SET_BYTE = 0x3ff6b0, T_SET_INT = 0x3ff430, T_MAIN_TICK = 0x971df0;
-const T_D_MD = 0x14d7b08, T_D_MODEL = 0x14d7b10, T_D_OBJECT_DISTANCE = 0x14d7b28;
-const T_D_LANDSCAPE_DISTANCE = 0x14d7b30, T_D_FRILL_COLOR = 0x14d7b50;
-const T_D_STATIC_SHADOWS = 0x14d7b58, T_D_LQ = 0x14d7b60, T_D_FNM = 0x14d7b68;
-const T_D_SEAM = 0x14d7c20;
-const OBJ_MULT_RVA = 0x1a0ad2c, OBJ_WRITER_A = 0x93ca26, OBJ_WRITER_B = 0x93ce3d;
+const T_SET_BYTE = A.T_SET_BYTE, T_SET_INT = A.T_SET_INT, T_MAIN_TICK = A.MAIN_THREAD_TICK;
+const T_D_MD = A.T_D_MD, T_D_MODEL = A.T_D_MODEL, T_D_OBJECT_DISTANCE = A.T_D_OBJECT_DISTANCE;
+const T_D_LANDSCAPE_DISTANCE = A.T_D_LANDSCAPE_DISTANCE, T_D_FRILL_COLOR = A.T_D_FRILL_COLOR;
+const T_D_STATIC_SHADOWS = A.T_D_STATIC_SHADOWS, T_D_LQ = A.T_D_LQ, T_D_FNM = A.T_D_FNM;
+const T_D_SEAM = A.T_D_SEAM;
+const OBJ_WRITER_A = A.OBJ_WRITER_A, OBJ_WRITER_B = A.OBJ_WRITER_B;
 const originalMaterialDetail = base.add(MATERIAL_DETAIL_RVA).readU32();
 const originalModelDetail = base.add(MODEL_DETAIL_RVA).readU32();
 const originalObjectDrawDistance = base.add(OBJECT_DRAW_DISTANCE_RVA).readU32();
@@ -1000,9 +1341,9 @@ function verifyStartupFullQuality() {
     texture: textureDetail.readU32(),
     aniso: anisotropicQuality.readU32(),
     memory: graphicsMemoryUsage.readFloat(),
-    grassDistance: engine === null ? -1 : engine.add(0x64).readU32(),
-    grassDensity: engine === null ? -1 : engine.add(0x60).readFloat(),
-    grassReduction: engine === null ? -1 : engine.add(0xe8).readU8()
+    grassDistance: engine === null ? -1 : engine.add(FRILL.distance).readU32(),
+    grassDensity: engine === null ? -1 : engine.add(FRILL.density).readFloat(),
+    grassReduction: engine === null ? -1 : engine.add(FRILL.reductionEnabled).readU8()
   };
   const expectedAllowLods = AUTO_ENABLE_LOD0 ? 0 : originalAllowLods;
   const verified = values.material === 1 &&
@@ -1050,7 +1391,7 @@ let terrainAutoRefresh = false, lastTerrainRefreshAt = 0, lastCompletedSize = 0;
 // flat no-normal-map variant - the exact problem the rebuild was meant to fix. Setting
 // the value once at startup and leaving it alone is the reliable behaviour.
 
-// --- object / ground-decoration draw distance (lever 0x1a0ad2c, NOP its 2 per-frame writers) ---
+// --- object / ground-decoration draw distance (OBJ_MULT lever, NOP its 2 per-frame writers) ---
 let objectBoostEnabled = false, originalObjectMult = 0, origObjWA = null, origObjWB = null;
 function boostedObjectMult() { return (originalObjectMult > 0 ? originalObjectMult : 1.0) * OBJECT_GAIN; }
 function enableObjectBoost() {
@@ -2651,7 +2992,7 @@ function enableResidencyGrid() {
 
   console.log(
     '[RESIDENCY GRID ON] anchors=' + RESIDENCY_MAX_ANCHORS +
-    ' coverage=9x9 landblocks | manager 0x995950'
+    ' coverage=9x9 landblocks | manager +0x' + A.LAND_RESIDENCY_UPDATE.toString(16)
   );
 }
 
@@ -2681,14 +3022,14 @@ function resolveFrillEngine() {
     if (frillEngine === null || !candidate.equals(frillEngine)) {
       frillEngine = candidate;
       originalFrillEngineSettings = {
-        runtimeDensity: frillEngine.add(0x60).readFloat(),
-        runtimeDistance: frillEngine.add(0x64).readU32(),
-        useDepthTransitions: frillEngine.add(0x9c).readU8(),
-        extraPreCache: frillEngine.add(0xa0).readU32(),
-        depthFade: frillEngine.add(0xe0).readFloat(),
-        reductionDistance: frillEngine.add(0xe4).readFloat(),
-        enableReduction: frillEngine.add(0xe8).readU8(),
-        playerPositionBlend: frillEngine.add(0xec).readFloat()
+        runtimeDensity: frillEngine.add(FRILL.density).readFloat(),
+        runtimeDistance: frillEngine.add(FRILL.distance).readU32(),
+        useDepthTransitions: frillEngine.add(FRILL.depthTransitions).readU8(),
+        extraPreCache: frillEngine.add(FRILL.preCache).readU32(),
+        depthFade: frillEngine.add(FRILL.depthFade).readFloat(),
+        reductionDistance: frillEngine.add(FRILL.reductionDistance).readFloat(),
+        enableReduction: frillEngine.add(FRILL.reductionEnabled).readU8(),
+        playerPositionBlend: frillEngine.add(FRILL.playerBlend).readFloat()
       };
       console.log(
         '[FRILL ENGINE] ' + frillEngine +
@@ -2800,13 +3141,13 @@ function enforceFrillBoost() {
 
   const engine = resolveFrillEngine();
   if (engine === null) return;
-  writeFloatIfChanged(engine.add(0x60), boostedFrillDensity());
-  writeU32IfChanged(engine.add(0x64), FRILL_DISTANCE_SECTORS);
-  writeU32IfChanged(engine.add(0xa0), FRILL_EXTRA_PRECACHE_LEVELS);
-  writeFloatIfChanged(engine.add(0xe0), FRILL_DEPTH_FADE_SECTORS);
-  writeFloatIfChanged(engine.add(0xe4), FRILL_FULL_DENSITY_SECTORS);
-  writeU8IfChanged(engine.add(0xe8), FRILL_REDUCTION_ENABLED);
-  writeFloatIfChanged(engine.add(0xec), 0.0);
+  writeFloatIfChanged(engine.add(FRILL.density), boostedFrillDensity());
+  writeU32IfChanged(engine.add(FRILL.distance), FRILL_DISTANCE_SECTORS);
+  writeU32IfChanged(engine.add(FRILL.preCache), FRILL_EXTRA_PRECACHE_LEVELS);
+  writeFloatIfChanged(engine.add(FRILL.depthFade), FRILL_DEPTH_FADE_SECTORS);
+  writeFloatIfChanged(engine.add(FRILL.reductionDistance), FRILL_FULL_DENSITY_SECTORS);
+  writeU8IfChanged(engine.add(FRILL.reductionEnabled), FRILL_REDUCTION_ENABLED);
+  writeFloatIfChanged(engine.add(FRILL.playerBlend), 0.0);
 }
 
 function enableFrillBoost() {
@@ -2833,14 +3174,14 @@ function disableFrillBoost() {
 
   const engine = resolveFrillEngine();
   if (engine !== null && originalFrillEngineSettings !== null) {
-    engine.add(0x60).writeFloat(originalFrillEngineSettings.runtimeDensity);
-    engine.add(0x64).writeU32(originalFrillEngineSettings.runtimeDistance);
-    engine.add(0x9c).writeU8(originalFrillEngineSettings.useDepthTransitions);
-    engine.add(0xa0).writeU32(originalFrillEngineSettings.extraPreCache);
-    engine.add(0xe0).writeFloat(originalFrillEngineSettings.depthFade);
-    engine.add(0xe4).writeFloat(originalFrillEngineSettings.reductionDistance);
-    engine.add(0xe8).writeU8(originalFrillEngineSettings.enableReduction);
-    engine.add(0xec).writeFloat(originalFrillEngineSettings.playerPositionBlend);
+    engine.add(FRILL.density).writeFloat(originalFrillEngineSettings.runtimeDensity);
+    engine.add(FRILL.distance).writeU32(originalFrillEngineSettings.runtimeDistance);
+    engine.add(FRILL.depthTransitions).writeU8(originalFrillEngineSettings.useDepthTransitions);
+    engine.add(FRILL.preCache).writeU32(originalFrillEngineSettings.extraPreCache);
+    engine.add(FRILL.depthFade).writeFloat(originalFrillEngineSettings.depthFade);
+    engine.add(FRILL.reductionDistance).writeFloat(originalFrillEngineSettings.reductionDistance);
+    engine.add(FRILL.reductionEnabled).writeU8(originalFrillEngineSettings.enableReduction);
+    engine.add(FRILL.playerBlend).writeFloat(originalFrillEngineSettings.playerPositionBlend);
   }
   console.log('[FRILL OFF] Grass/frill settings restored.');
 }
@@ -3698,7 +4039,7 @@ setInterval(function () {
     // Expect a visible hitch: this is a full rebuild, not an incremental update.
     if (dualKeyPressed(VK_CONTROL, VK_F12, 'restream')) {
       try {
-        base.add(0x1e4150c).writeU8(textureDetail.readU32() ^ 0xff);
+        base.add(A.TEXTURE_DETAIL_MIRROR).writeU8(textureDetail.readU32() ^ 0xff);
         console.log('[F12] heavy landscape re-stream (every cell is rebuilt)');
       } catch (e) { console.log('[F12 ERR] ' + e); }
     }
@@ -3818,19 +4159,21 @@ setInterval(function () {
   let frillActiveDraw = -1;
   const engine = resolveFrillEngine();
   if (engine !== null) {
-    try { frillRuntimeDistance = engine.add(0x64).readU32(); } catch (_) {}
-    try { frillRuntimeDensity = engine.add(0x60).readFloat(); } catch (_) {}
-    try { frillPlayerBlend = engine.add(0xec).readFloat(); } catch (_) {}
-    try { frillDepthFade = engine.add(0xe0).readFloat(); } catch (_) {}
-    try { frillReductionDistance = engine.add(0xe4).readFloat(); } catch (_) {}
-    try { frillReductionEnabled = engine.add(0xe8).readU8(); } catch (_) {}
-    try { frillCenterX = engine.add(0x28).readS32(); } catch (_) {}
-    try { frillCenterY = engine.add(0x2c).readS32(); } catch (_) {}
+    try { frillRuntimeDistance = engine.add(FRILL.distance).readU32(); } catch (_) {}
+    try { frillRuntimeDensity = engine.add(FRILL.density).readFloat(); } catch (_) {}
+    try { frillPlayerBlend = engine.add(FRILL.playerBlend).readFloat(); } catch (_) {}
+    try { frillDepthFade = engine.add(FRILL.depthFade).readFloat(); } catch (_) {}
+    try { frillReductionDistance = engine.add(FRILL.reductionDistance).readFloat(); } catch (_) {}
+    try { frillReductionEnabled = engine.add(FRILL.reductionEnabled).readU8(); } catch (_) {}
+    if (FRILL.centerX !== null) {
+      try { frillCenterX = engine.add(FRILL.centerX).readS32(); } catch (_) {}
+      try { frillCenterY = engine.add(FRILL.centerY).readS32(); } catch (_) {}
+    }
     try { frillLoadState = engine.readS32(); } catch (_) {}
-    try { frillLoadRing = engine.add(0x68).readS32(); } catch (_) {}
-    try { frillLoadIndex = engine.add(0x6c).readS32(); } catch (_) {}
-    try { frillHashLoaded = engine.add(0x5c).readS32(); } catch (_) {}
-    try { frillActiveDraw = engine.add(0xbc).readS32(); } catch (_) {}
+    try { frillLoadRing = engine.add(FRILL.loadRing).readS32(); } catch (_) {}
+    try { frillLoadIndex = engine.add(FRILL.loadIndex).readS32(); } catch (_) {}
+    try { frillHashLoaded = engine.add(FRILL.hashLoaded).readS32(); } catch (_) {}
+    try { frillActiveDraw = engine.add(FRILL.activeDraw).readS32(); } catch (_) {}
     if (frillLoadRing > maxFrillLoadRing) maxFrillLoadRing = frillLoadRing;
   }
 
@@ -4194,8 +4537,8 @@ function hudVal(label, extra) {
 function hudSections() {
   const rd = hudSafe;
   const engine = rd(function () { return resolveFrillEngine(); }, null);
-  const grassDist = engine === null ? -1 : rd(function () { return engine.add(0x64).readU32(); }, -1);
-  const grassDens = engine === null ? -1 : rd(function () { return engine.add(0x60).readFloat(); }, -1);
+  const grassDist = engine === null ? -1 : rd(function () { return engine.add(FRILL.distance).readU32(); }, -1);
+  const grassDens = engine === null ? -1 : rd(function () { return engine.add(FRILL.density).readFloat(); }, -1);
   const fnm = rd(function () { return base.add(FAR_LANDSCAPE_NORMAL_MAPS_RVA).readU8(); }, -1);
   const seam = rd(function () { return base.add(NEAR_FAR_SEAM_BLEND_RVA).readU8(); }, -1);
   const landQ = rd(function () { return base.add(LANDSCAPE_DRAW_DISTANCE_RVA).readU32(); }, -1);
@@ -4859,14 +5202,14 @@ const FEATURES = {
     get: function () {
       const engine = resolveFrillEngine();
       if (engine === null) return FRILL_REDUCTION_ENABLED !== 0;
-      try { return engine.add(0xe8).readU8() !== 0; }
+      try { return engine.add(FRILL.reductionEnabled).readU8() !== 0; }
       catch (_) { return FRILL_REDUCTION_ENABLED !== 0; }
     },
     set: function (on) {
       FRILL_REDUCTION_ENABLED = on ? 1 : 0;
       const engine = resolveFrillEngine();
       if (engine !== null) {
-        try { writeU8IfChanged(engine.add(0xe8), FRILL_REDUCTION_ENABLED); } catch (_) {}
+        try { writeU8IfChanged(engine.add(FRILL.reductionEnabled), FRILL_REDUCTION_ENABLED); } catch (_) {}
       }
     }
   },
@@ -5240,9 +5583,9 @@ rpc.exports = {
       textureDetail: rd(function () { return textureDetail.readU32(); }, -1),
       aniso: rd(function () { return anisotropicQuality.readU32(); }, -1),
       objectMult: rd(function () { return base.add(OBJ_MULT_RVA).readFloat(); }, -1),
-      grassDrawSectors: engine === null ? -1 : rd(function () { return engine.add(0x64).readU32(); }, -1),
-      grassDensity: engine === null ? -1 : rd(function () { return engine.add(0x60).readFloat(); }, -1),
-      grassReduction: engine === null ? -1 : rd(function () { return engine.add(0xe8).readU8(); }, -1),
+      grassDrawSectors: engine === null ? -1 : rd(function () { return engine.add(FRILL.distance).readU32(); }, -1),
+      grassDensity: engine === null ? -1 : rd(function () { return engine.add(FRILL.density).readFloat(); }, -1),
+      grassReduction: engine === null ? -1 : rd(function () { return engine.add(FRILL.reductionEnabled).readU8(); }, -1),
       streamFar: streamObject === null ? -1 : rd(function () { return streamObject.add(0x38).readU32(); }, -1),
       streamNear: streamObject === null ? -1 : rd(function () { return streamObject.add(0x3c).readU32(); }, -1),
       smartBoxLoadForPlayer: rd(function () { const b = resolveSmartBox(); return b === null ? -1 : b.add(0x250).readU8(); }, -1)

@@ -161,8 +161,9 @@ Lord of the Rings Online is their trademark.
 
 ### Step 0: check that it can run at all
 
-The addresses in this script are compiled for **one exact client build**. If yours
-doesn't match, nothing below will help you and the script will refuse to start. Check
+The addresses in these scripts are compiled for **specific client builds** — two are
+shipped, and the right table is picked automatically from your client. If yours is
+neither, nothing below will help you and the script will refuse to start. Check
 [Will it even run for you?](#will-it-even-run-for-you) first — it takes ten seconds and
 saves you installing Python for nothing.
 
@@ -369,7 +370,8 @@ running, or it's still at the launcher. The launcher is a different executable.
 **"Failed to attach: access denied"** — PowerShell isn't elevated. Close it and reopen
 as Administrator.
 
-**"Unsupported LOTRO build: 0x..."** — see Step 0. The script stopped on purpose.
+**"Unsupported LOTRO build: module size 0x..."** or **"Refusing to install: ..."** — see
+Step 0. The script stopped on purpose, before touching anything.
 
 **`frida` is not recognised** — Step 2 didn't complete, or you need a fresh PowerShell
 window so it picks up the updated PATH.
@@ -405,33 +407,61 @@ on. That's really all there is to it.
 
 Possibly not, and I'd rather you knew that before installing anything.
 
-The addresses in this script are hardcoded for one exact client build:
+The addresses in these scripts are hardcoded per client build. Two are shipped, and the
+script picks the right table from the module size at startup:
 
-```
-lotroclient64.exe
-build 4808.0070.7360.4034
-module size 0x22b4000  (36,258,816 bytes)
-```
+| Build | Module size | Notes |
+|---|---|---|
+| `4900.0070.8146.4007` | `0x22bd000` (36,315,136 bytes) | Current live client |
+| `4808.0070.7360.4034` | `0x22b4000` (36,258,816 bytes) | Previous |
 
 You can check your own copy in PowerShell:
 
 ```powershell
-(Get-Item "<path>\lotroclient64.exe").Length          # want 36258816
-(Get-Item "<path>\lotroclient64.exe").VersionInfo     # want 4808.0070.7360.4034
+(Get-Item "<path>\lotroclient64.exe").VersionInfo.FileVersion   # want 4900.0070.8146.4007
 ```
 
-The script checks the module size on startup and refuses to run if it doesn't match:
+If the size matches neither table, the script stops before touching anything:
 
 ```
-Error: Unsupported LOTRO build: 0x<size>, expected 0x22b4000
+Error: Unsupported LOTRO build: module size 0x<size>. Known: 0x22bd000 (4900...), 0x22b4000 (4808...)
 ```
 
 That guard is there because running the wrong addresses would write garbage into random
-memory and take the client down with it. Worth being precise about what the check
-actually buys you though: it's a sanity check, not a cryptographic one. It confirms the
-module is the size it should be. It can't prove it's the same binary, so if you've
-somehow got a different executable that happens to be the exact same size, the check
-won't catch it. In practice, for an unmodified client, it does its job.
+memory and take the client down with it. The size check alone is a sanity check, not a
+cryptographic one — it can't prove it's the same binary — so there is a second guard
+behind it: before anything is hooked, called or patched, the script reads back the first
+bytes of every function it is about to touch and compares them against a known prologue.
+If any one of them has moved, it refuses to install and says which:
+
+```
+Refusing to install: 3 function(s) do not match the 4900.0070.8146.4007 address table
+(FRILL_CENTER_UPDATE, MAIN_THREAD_TICK, PUSH_CAMERA). The client has changed since these
+offsets were derived - nothing was hooked, nothing was patched, and the game is untouched.
+```
+
+That is the check that actually protects you across a patch. A client update that keeps
+the module size the same but moves code would sail past the size check; it cannot get
+past the prologue check.
+
+### How the 4900 addresses were derived
+
+Every 4900 address came from the corresponding 4808 one, not from a fresh hunt:
+
+- **Functions** were transferred by masked signature — the 4808 prologue bytes with rip
+  displacements and rel32 branch targets wildcarded — then confirmed by disassembling
+  the full body on both sides and comparing instruction for instruction. Where a
+  signature matched several places (the three flight-movement axes are byte-identical
+  apart from the direction vector each reads), the ordering was pinned down by matching
+  the spacing between matches and the data each one touches.
+- **Globals** were resolved through the instructions that reference them: transfer the
+  referencing instruction, then decode its rip displacement in 4900. Each address was
+  cross-checked against every xref site it has — up to twelve for some — and all sites
+  agreed on all of them.
+- **Struct offsets** were re-derived rather than assumed. Most are unchanged, but
+  `FrillEngine` grew by `0x18` bytes below offset `0x60`, so every grass field this
+  script reads or writes moved with it. That was confirmed against the engine's own
+  constructor and its quality-apply function, which write the same slots.
 
 The upshot is that **any game patch will break this** until the addresses are found
 again. That's not a bug, it's the nature of the thing. And re-finding them isn't a
@@ -878,35 +908,40 @@ speed), both restored on detach.
 Nine are installed in normal operation. Three more exist behind `DEEP_DIAGNOSTIC_HOOKS`,
 which is off.
 
+Addresses are given as **4900 / 4808**.
+
 | Target | Purpose |
 |---|---|
-| Main game tick (`0x971df0`) | Runs all queued engine work, the HUD, and restore. The one place engine state is touched |
-| Mip bias function (`0x860ff0`) | Writes the sharp-texture bias as samplers are built |
-| Provider completion (`0x4fe890`) | Marks a landblock's surface as finished so it isn't re-requested |
-| Position update (`0x54dfa0`) | Tracks the streaming target |
-| Camera input tick (`0x973b00`) | Applies flight movement; detached when the camera stops |
-| Frill centre update (`0x956470`) | Keeps the grass system centred on the camera |
-| Land resource build (`0x995720`) | Retains land sources so they aren't evicted |
-| Resource unwrap (`0x34b460`) | Resolves land source handles |
-| SmartBox land update (`0x96da90`) | Forces the landscape origin when F6 is on |
+| Main game tick (`0x974ee0` / `0x971df0`) | Runs all queued engine work, the HUD, and restore. The one place engine state is touched |
+| Mip bias function (`0x861bb0` / `0x860ff0`) | Writes the sharp-texture bias as samplers are built |
+| Provider completion (`0x4fecf0` / `0x4fe890`) | Marks a landblock's surface as finished so it isn't re-requested |
+| Position update (`0x54e470` / `0x54dfa0`) | Tracks the streaming target |
+| Camera input tick (`0x976bf0` / `0x973b00`) | Applies flight movement; detached when the camera stops |
+| Frill centre update (`0x959560` / `0x956470`) | Keeps the grass system centred on the camera |
+| Land resource build (`0x998810` / `0x995720`) | Retains land sources so they aren't evicted |
+| Resource unwrap (`0x34b4c0` / `0x34b460`) | Resolves land source handles |
+| SmartBox land update (`0x970b80` / `0x96da90`) | Forces the landscape origin when F6 is on |
 
 ### Globals it writes
 
 All are restored on detach.
 
-| Address | What |
-|---|---|
-| `0x1a08fe4` / `0x1a08fe8` / `0x1a08ff8` | Texture filtering, anisotropic quality, texture detail |
-| `0x1a08ffc` / `0x1a09000` | Material detail, model detail |
-| `0x1a0900c` / `0x1a09010` | Object and landscape draw distance |
-| `0x1a09014` | Distant imposters |
-| `0x1a09018` / `0x1a0901c` / `0x1a09020` | Frill distance quality, density, terrain colour |
-| `0x1a09024` / `0x1a09028` / `0x1a0902c` | Static object shadows, lighting quality, far normal maps |
-| `0x1a09075` | Near/far seam blending |
-| `0x1a09094` | Graphics memory usage |
-| `0x1a0ac51` / `0x1a0ac52` | Static PVS, AllowLODs |
-| `0x1a0ad2c` | Object draw multiplier (`objectboost` only) |
-| `0x1a0c7ea` / `0x1a0c89c` | Flight camera physics flag and move speed |
+The whole cvar block moved by a flat `+0x9000` between the two builds, so the 4808
+column is the 4900 one minus `0x9000`.
+
+| 4900 | 4808 | What |
+|---|---|---|
+| `0x1a11fe4` / `0x1a11fe8` / `0x1a11ff8` | `0x1a08fe4` / `0x1a08fe8` / `0x1a08ff8` | Texture filtering, anisotropic quality, texture detail |
+| `0x1a11ffc` / `0x1a12000` | `0x1a08ffc` / `0x1a09000` | Material detail, model detail |
+| `0x1a1200c` / `0x1a12010` | `0x1a0900c` / `0x1a09010` | Object and landscape draw distance |
+| `0x1a12014` | `0x1a09014` | Distant imposters |
+| `0x1a12018` / `0x1a1201c` / `0x1a12020` | `0x1a09018` / `0x1a0901c` / `0x1a09020` | Frill distance quality, density, terrain colour |
+| `0x1a12024` / `0x1a12028` / `0x1a1202c` | `0x1a09024` / `0x1a09028` / `0x1a0902c` | Static object shadows, lighting quality, far normal maps |
+| `0x1a12075` | `0x1a09075` | Near/far seam blending |
+| `0x1a12094` | `0x1a09094` | Graphics memory usage |
+| `0x1a13c51` / `0x1a13c52` | `0x1a0ac51` / `0x1a0ac52` | Static PVS, AllowLODs |
+| `0x1a13d2c` | `0x1a0ad2c` | Object draw multiplier (`objectboost` only) |
+| `0x1a157ea` / `0x1a1589c` | `0x1a0c7ea` / `0x1a0c89c` | Flight camera physics flag and move speed |
 
 ### Code and read-only data it patches
 
@@ -914,16 +949,16 @@ This is the part worth reading closely if you're auditing, so here is all of it.
 site is saved before it is modified. All but one are restored on detach - the exception
 is called out below, because "it puts everything back" would not be quite true.
 
-| Address | Size | When | What |
-|---|---|---|---|
-| `0x995a16` | 16 bytes | **On by default** | Land residency limit. Raises the engine's cap on how many landblocks may stay resident — without it the extended grass grid is evicted as fast as it loads |
-| `0x156c404` | 4 bytes | **On by default** | Frill time budget multiplier. A float in read-only data, so it needs a page-protection change rather than a plain write. This is the grass loader's per-frame main-thread budget (`setfrillbudget`) |
-| `0x93ca26`, `0x93ce3d` | 8 bytes each | Only with `objectboost` | The two per-frame writers to the object draw multiplier are NOPed so the value stays where it's put |
+| 4900 | 4808 | Size | When | What |
+|---|---|---|---|---|
+| `0x998b06` | `0x995a16` | 16 bytes | **On by default** | Land residency limit. Raises the engine's cap on how many landblocks may stay resident — without it the extended grass grid is evicted as fast as it loads. Both builds hold the same `cmp r10d, 4`, and it is the only one in the function |
+| `0x15738a4` | `0x156c404` | 4 bytes | **On by default** | Frill time budget multiplier. A float in read-only data, so it needs a page-protection change rather than a plain write. This is the grass loader's per-frame main-thread budget (`setfrillbudget`) |
+| `0x93fb36`, `0x93ff4d` | `0x93ca26`, `0x93ce3d` | 8 bytes each | Only with `objectboost` | The two per-frame writers to the object draw multiplier are NOPed so the value stays where it's put |
 
 The first two are active as soon as you attach, because grass is on by default. Turning
 `GRASS_MACHINERY` off at the top of the file disables both.
 
-**The one thing that is not always restored:** the residency limit at `0x995a16` is only
+**The one thing that is not always restored:** the residency limit patch is only
 put back if five or fewer landblock anchors are still resident when you detach. With the
 default settings there are nine, so in practice it usually stays patched until you close
 the game, and it says so in the console when you detach:
@@ -1081,8 +1116,12 @@ to disk, so restarting the game clears all of it.
 
 ## When it doesn't work
 
-**"Unsupported LOTRO build"** — your client doesn't match. Covered above, the addresses have
-to be found again for your version.
+**"Unsupported LOTRO build"** — your client is neither shipped build. Covered above; the
+addresses have to be found again for your version.
+
+**"Refusing to install: N function(s) do not match ..."** — the size matched but the code
+behind it moved, so a client patch has shifted things. Nothing was hooked or written. The
+console lists which functions and what it found instead of what it expected.
 
 **"Failed to attach" or "unable to find process"** — run PowerShell as Administrator, and
 check the game is actually running rather than sitting at the launcher.

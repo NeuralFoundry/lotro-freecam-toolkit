@@ -14,32 +14,81 @@
 // nothing is written to disk. Two camera cvars are changed while flying (collision off,
 // move speed) and both are restored on detach.
 //
-// Target build: 4808.0070.7360.4034 (lotroclient64.exe, module size 0x22b4000). Every
-// address below is an RVA into that exact binary. The size guard refuses to run rather
-// than write to the wrong offsets in a different build.
+// Supported builds (see BUILDS below). The script picks its address table from the
+// module size, then re-checks the first bytes of every function it hooks or calls
+// before installing anything. If either check fails it refuses to run rather than
+// write to the wrong offsets.
+//
+//   4900.0070.8146.4007   module size 0x22bd000   <- current live client
+//   4808.0070.7360.4034   module size 0x22b4000
 'use strict';
 
 const MODULE_NAME = 'lotroclient64.exe';
-const EXPECTED_SIZE = 0x22b4000;
 
-const RVA = {
-  // Per-frame camera input tick. Hooked so movement is applied in step with the
-  // engine's own camera update rather than from a timer.
-  cameraInputTick: 0x973b00,
-  // Camera stack push/pop. push returns a token that pop must be given back.
-  pushCamera: 0x9732f0,
-  popCamera: 0x97c190,
-  // Puts the camera into the free-look mode the flight controller expects.
-  makeFpsSlow: 0x97ab70,
-  // The engine's three movement axes. Each takes the controller and a signed delta.
-  moveForward: 0x97b1f0,
-  moveStrafe: 0x97b370,
-  moveVertical: 0x97b4f0,
-  // Used to confirm a resolved pointer really is a FlightCameraController.
-  flightVtable: 0x1568d40,
-  // Camera cvars: collision/physics, and the movement speed multiplier.
-  usePhysics: 0x1a0c7ea,
-  moveSpeedScale: 0x1a0c89c
+// Every address is an RVA into that exact binary. The 4900 column was derived from the
+// 4808 one by masked-signature transfer (rip displacements and rel32 branch targets
+// wildcarded) and then confirmed instruction-by-instruction over the full function body;
+// data addresses were resolved through their referencing instructions and cross-checked
+// across every xref site, all of which agreed.
+const BUILDS = {
+  0x22bd000: {
+    name: '4900.0070.8146.4007',
+    rva: {
+      // Per-frame camera input tick. Hooked so movement is applied in step with the
+      // engine's own camera update rather than from a timer.
+      cameraInputTick: 0x976bf0,
+      // Camera stack push/pop. push returns a token that pop must be given back.
+      pushCamera: 0x9763e0,
+      popCamera: 0x97f280,
+      // Puts the camera into the free-look mode the flight controller expects.
+      makeFpsSlow: 0x97dc60,
+      // The engine's three movement axes. Each takes the controller and a signed delta.
+      // They are byte-identical to each other apart from the direction vector each reads
+      // (forward 0x156f060, strafe 0x156f050, vertical 0x156f070), which is what pins
+      // this ordering down.
+      moveForward: 0x97e2e0,
+      moveStrafe: 0x97e460,
+      moveVertical: 0x97e5e0,
+      // Used to confirm a resolved pointer really is a FlightCameraController.
+      flightVtable: 0x15701e0,
+      // Camera cvars: collision/physics, and the movement speed multiplier.
+      usePhysics: 0x1a157ea,
+      moveSpeedScale: 0x1a1589c
+    }
+  },
+  0x22b4000: {
+    name: '4808.0070.7360.4034',
+    rva: {
+      cameraInputTick: 0x973b00,
+      pushCamera: 0x9732f0,
+      popCamera: 0x97c190,
+      makeFpsSlow: 0x97ab70,
+      moveForward: 0x97b1f0,
+      moveStrafe: 0x97b370,
+      moveVertical: 0x97b4f0,
+      flightVtable: 0x1568d40,
+      usePhysics: 0x1a0c7ea,
+      moveSpeedScale: 0x1a0c89c
+    }
+  }
+};
+
+// First bytes of each function this script hooks or calls. '??' marks a byte that is a
+// rip displacement or a rel32 branch target - those move with the build, the rest do not.
+// These happen to be identical on both supported builds, so one table covers them.
+//
+// This is the safety net that matters: if a future patch shifts these functions, the
+// address table silently points into the middle of something else, and attaching a hook
+// or calling through it crashes the client. Checking the prologue first turns that into
+// a refusal to start.
+const PROLOGUE = {
+  cameraInputTick: '48 8b c4 55 53 56 57 41 54 41 56',
+  pushCamera: '48 89 5c 24 08 57 48 81 ec b0 00 00 00',
+  popCamera: '48 89 5c 24 10 48 89 6c 24 18',
+  makeFpsSlow: '40 55 53 56 57 48 8b ec 48 83 ec 48',
+  moveForward: '40 53 48 81 ec 80 00 00 00 f3 0f 10 05 ?? ?? ??',
+  moveStrafe: '40 53 48 81 ec 80 00 00 00 f3 0f 10 05 ?? ?? ??',
+  moveVertical: '40 53 48 81 ec 80 00 00 00 f3 0f 10 05 ?? ?? ??'
 };
 
 // Movement is read as raw virtual-key codes, so the physical key depends on the
@@ -70,14 +119,55 @@ const PRECISE_MULTIPLIER = 0.25;
 const FOREGROUND_POLL_MS = 50;
 
 const mod = Process.getModuleByName(MODULE_NAME);
-if (mod.size !== EXPECTED_SIZE) {
+const build = BUILDS[mod.size];
+if (build === undefined) {
   throw new Error(
-    'Unsupported LOTRO build: 0x' + mod.size.toString(16) +
-    ', expected 0x' + EXPECTED_SIZE.toString(16)
+    'Unsupported LOTRO build: module size 0x' + mod.size.toString(16) +
+    '. Known: ' + Object.keys(BUILDS).map(function (s) {
+      return '0x' + Number(s).toString(16) + ' (' + BUILDS[s].name + ')';
+    }).join(', ')
   );
 }
 
 const base = mod.base;
+const RVA = build.rva;
+
+// Compares the bytes actually in the process against PROLOGUE. Reads through Frida
+// rather than off disk on purpose: this sees the real mapped image, including anything
+// another tool has already patched in.
+function verifyPrologue(name) {
+  const expected = PROLOGUE[name];
+  if (expected === undefined) return true;
+  const parts = expected.split(' ');
+  const actual = base.add(RVA[name]).readByteArray(parts.length);
+  const bytes = new Uint8Array(actual);
+  const seen = [];
+  let ok = true;
+  for (let i = 0; i < parts.length; i++) {
+    seen.push(('0' + bytes[i].toString(16)).slice(-2));
+    if (parts[i] === '??') continue;
+    if (bytes[i] !== parseInt(parts[i], 16)) ok = false;
+  }
+  if (!ok) {
+    console.log('[freecam] ' + name + ' @ +0x' + RVA[name].toString(16) +
+      '\n           expected ' + expected +
+      '\n           found    ' + seen.join(' '));
+  }
+  return ok;
+}
+
+const mismatched = Object.keys(PROLOGUE).filter(function (name) {
+  return !verifyPrologue(name);
+});
+if (mismatched.length > 0) {
+  throw new Error(
+    'Refusing to install: ' + mismatched.length + ' function(s) do not match the ' +
+    build.name + ' address table (' + mismatched.join(', ') + '). ' +
+    'The client has changed since these offsets were derived - nothing was hooked ' +
+    'and the game is untouched.'
+  );
+}
+
 const flightVtable = base.add(RVA.flightVtable);
 const usePhysics = base.add(RVA.usePhysics);
 const moveSpeedScale = base.add(RVA.moveSpeedScale);
@@ -151,6 +241,9 @@ function down(vk) {
 // Walks the camera state machine to the active controller, then confirms the vtable
 // matches FlightCameraController before returning it. The layout differs depending on
 // how the machine was set up, hence the fallback through the list head at +0x10.
+//
+// These three offsets are the same on both supported builds - the camera manager tick
+// still reads machine+0x30, machine+0x10 and state+0x70 in 4900.
 function resolveFlightController(machine) {
   try {
     let state = machine.add(0x30).readPointer();
@@ -267,6 +360,7 @@ hook = Interceptor.attach(base.add(RVA.cameraInputTick), {
 });
 
 log('=== LOTRO FREECAM (minimal - camera only, no render changes) ===');
+log('build ' + build.name + '  (module size 0x' + mod.size.toString(16) + ')');
 log('Ctrl+F8 start/stop | mouse look | LShift 4x faster | LCtrl precise');
 log('Move (US layout)   P forward | ; back | L left | \' right | O up | [ down');
 log('Move (Turkish-Q)   P forward | S back | L left | I right | O up | G down');
@@ -296,6 +390,8 @@ rpc.exports = {
   },
   status: function () {
     return {
+      build: build.name,
+      moduleSize: '0x' + mod.size.toString(16),
       active: active,
       token: token,
       controller: controller.toString(),
