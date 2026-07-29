@@ -13,8 +13,10 @@
 // The avatar never moves and nothing is sent to the server. Every change is made to
 // process memory, captured before it is modified, and reverted on detach.
 //
-// Supported builds (lotroclient64.exe), picked automatically from the module size:
-//   4900.0070.8146.4007   module size 0x22bd000   <- current live client
+// Supported builds (lotroclient64.exe). 4900 and 4901 share a module size, so the
+// build is picked by matching PROLOGUE bytes, not by size alone:
+//   4901.0070.8449.4010   module size 0x22bd000   <- current live client
+//   4900.0070.8146.4007   module size 0x22bd000   (same size - see selectBuild)
 //   4808.0070.7360.4034   module size 0x22b4000
 // Every address below is an RVA into that exact binary. On top of the size check the
 // script re-reads the first bytes of every function it hooks or calls and refuses to
@@ -28,8 +30,124 @@ const MODULE_NAME = 'lotroclient64.exe';
 // instruction-by-instruction across the full function body. Data addresses were
 // resolved through their referencing instructions, cross-checked across every xref
 // site; all sites agreed on every address.
-const BUILDS = {
-  0x22bd000: {
+const BUILDS = [
+  {
+    size: 0x22bd000,
+    name: '4901.0070.8449.4010',
+    rva: {
+      POSITION_UPDATE_FUNCTION: 0x54e470,
+      WORLD_CELL_PRIMARY: 0x5673e0,
+      WORLD_CELL_SECONDARY: 0x567590,
+      WORLD_CELL_ENTER: 0x5677d0,
+      FRILL_CENTER_UPDATE: 0x9591a0,
+      FRILL_LOADER_UPDATE: 0x957090,
+      FRILL_SECTOR_REFRESH: 0x9583d0,
+      TERRAIN_TILE_REQUEST: 0x500150,
+      RESOURCE_UNWRAP: 0x34b4c0,
+      RESOURCE_KEY_TO_ID: 0x441560,
+      RESOURCE_HANDLE_INIT: 0x5e8420,
+      POSITION_TO_RESOURCE_KEY: 0x8a2af0,
+      SERVICE_LOCATOR_GET: 0x115d200,
+      SERVICE_LOCATOR_FIND: 0x115d170,
+      PROVIDER_REQUEST: 0x506eb0,
+      PROVIDER_COMPLETION: 0x4fecf0,
+      REQUEST_DESCRIPTOR_INIT: 0x58e4e0,
+      REQUEST_DESCRIPTOR_DESTROY: 0x58eb80,
+      REQUEST_STAMP_THUNK: 0x749db0,
+      LAND_RESOURCE_BUILD: 0x998450,
+      LAND_RESIDENCY_UPDATE: 0x998680,
+      LAND_RESIDENCY_LIMIT_PATCH: 0x998746,
+      MAIN_THREAD_TICK: 0x974b20,
+      SMARTBOX_LAND_UPDATE: 0x9707c0,
+      FAR_RADIUS_APPLY: 0x96f9b0,
+      CONSOLE_STRING_CONSTRUCT: 0x305200,
+      CONSOLE_DISPATCH: 0x3fcc40,
+      GRAPHICS_RESOURCE_PURGE_BUDGET: 0x8634d0,
+      ASYNC_CACHE_CONFIG_RESOLVE: 0x5e8bc0,
+      OBJECT_DISTANCE_FUNCTION: 0x8fa800,
+      MIP_BIAS_FUNCTION: 0x861bb0,
+      CAMERA_INPUT_TICK: 0x976830,
+      PUSH_CAMERA: 0x976020,
+      POP_CAMERA: 0x97eec0,
+      MAKE_FPS_SLOW: 0x97d8a0,
+      FLIGHT_MOVE_FORWARD: 0x97df20,
+      FLIGHT_MOVE_STRAFE: 0x97e0a0,
+      FLIGHT_MOVE_VERTICAL: 0x97e220,
+      T_SET_BYTE: 0x3ff790,
+      T_SET_INT: 0x3ff510,
+      OBJ_WRITER_A: 0x93f776,
+      OBJ_WRITER_B: 0x93fb8d,
+      LAND_PROVIDER_SERVICE_IID: 0x1564460,
+      LAND_PROVIDER_IID: 0x1564450,
+      PLAYER_POSITION_COPY: 0x1a151f0,
+      SMARTBOX_GLOBAL: 0x1e52bb0,
+      CACHED_LAND_ORIGIN: 0x1a15780,
+      ASYNC_CACHE_REGISTRY: 0x19fe478,
+      ASYNC_CACHE_VTABLE: 0x14e5980,
+      STATIC_PVS_FLAG: 0x1a13c51,
+      ALLOW_LODS_FLAG: 0x1a13c52,
+      MATERIAL_DETAIL: 0x1a11ffc,
+      MODEL_DETAIL: 0x1a12000,
+      OBJECT_DRAW_DISTANCE: 0x1a1200c,
+      LANDSCAPE_DRAW_DISTANCE: 0x1a12010,
+      DISTANT_IMPOSTERS: 0x1a12014,
+      FRILL_DISTANCE_QUALITY: 0x1a12018,
+      FRILL_DENSITY: 0x1a1201c,
+      FRILL_TERRAIN_COLOR: 0x1a12020,
+      LANDSCAPE_STATIC_OBJECT_SHADOWS: 0x1a12024,
+      LANDSCAPE_LIGHTING_QUALITY: 0x1a12028,
+      FAR_LANDSCAPE_NORMAL_MAPS: 0x1a1202c,
+      FRILL_ENGINE_GLOBAL: 0x1e4fd60,
+      FRILL_TIME_BUDGET_MULTIPLIER: 0x15738a4,
+      TEXTURE_FILTERING: 0x1a11fe4,
+      ANISOTROPIC_QUALITY: 0x1a11fe8,
+      TEXTURE_DETAIL: 0x1a11ff8,
+      GRAPHICS_MEMORY_USAGE: 0x1a12094,
+      TEXTURE_FILTER_DIRTY: 0x1e4aa54,
+      TEXTURE_DETAIL_MIRROR: 0x1e4adfc,
+      NEAR_FAR_SEAM_BLEND: 0x1a12075,
+      FLIGHT_VTABLE: 0x15701e0,
+      FLIGHT_USE_PHYSICS: 0x1a157ea,
+      FLIGHT_MOVE_SPEED: 0x1a1589c,
+      LAND_RESOURCE_KEY_VTABLE: 0x14df560,
+      RENDER_DEVICE_PTR: 0x1e505d0,
+      VRAM_MB_SCALE: 0x1557e88,
+      GFX_RESOURCE_LIST: 0x1e4ad20,
+      GFX_RESOURCE_COUNT: 0x1e4ad2c,
+      OBJ_MULT: 0x1a13d2c,
+      T_D_MD: 0x14deb08,
+      T_D_MODEL: 0x14deb10,
+      T_D_OBJECT_DISTANCE: 0x14deb28,
+      T_D_LANDSCAPE_DISTANCE: 0x14deb30,
+      T_D_FRILL_COLOR: 0x14deb50,
+      T_D_STATIC_SHADOWS: 0x14deb58,
+      T_D_LQ: 0x14deb60,
+      T_D_FNM: 0x14deb68,
+      T_D_SEAM: 0x14dec20,
+    },
+    frill: {
+      density: 0x78,
+      distance: 0x7c,
+      depthTransitions: 0xb4,
+      preCache: 0xb8,
+      depthFade: 0xf8,
+      reductionDistance: 0xfc,
+      reductionEnabled: 0x100,
+      playerBlend: 0x104,
+      hashLoaded: 0x74,
+      loadRing: 0x80,
+      loadIndex: 0x84,
+      activeDraw: 0xd4,
+      // Diagnostic only. 4808 read the loader's grid centre at +0x28/+0x2c, but 4900
+      // rebuilt the 0x24..0x58 window (a pointer and three new words moved in), so
+      // those two dwords have no honest counterpart here. Left null rather than
+      // printing whatever happens to sit at the old offsets.
+      centerX: null,
+      centerY: null,
+    }
+  },
+  {
+    size: 0x22bd000,
     name: '4900.0070.8146.4007',
     rva: {
       POSITION_UPDATE_FUNCTION: 0x54e470,
@@ -143,7 +261,8 @@ const BUILDS = {
       centerY: null,
     }
   },
-  0x22b4000: {
+  {
+    size: 0x22b4000,
     name: '4808.0070.7360.4034',
     rva: {
       POSITION_UPDATE_FUNCTION: 0x54dfa0,
@@ -252,17 +371,111 @@ const BUILDS = {
       centerX: 0x28,
       centerY: 0x2c,
     }
-  },
+  }
+];
+
+const PROLOGUE = {
+  POSITION_UPDATE_FUNCTION: '48 89 5c 24 08 55 48 8b ec 48 83 ec 60',
+  WORLD_CELL_PRIMARY: '48 89 5c 24 10 48 89 6c 24 20',
+  WORLD_CELL_SECONDARY: '48 89 5c 24 10 55 56 57 41 54',
+  WORLD_CELL_ENTER: '48 89 5c 24 10 48 89 74 24 20',
+  FRILL_CENTER_UPDATE: '48 8b c4 48 89 58 10 55 56 57',
+  FRILL_LOADER_UPDATE: '48 89 5c 24 08 55 56 57 41 54',
+  FRILL_SECTOR_REFRESH: '48 89 5c 24 18 4c 89 4c 24 20',
+  TERRAIN_TILE_REQUEST: '48 8b 89 e0 00 00 00 48 85 c9',
+  RESOURCE_UNWRAP: '4c 8b c1 48 8b 0d ?? ?? ?? ??',
+  RESOURCE_KEY_TO_ID: '48 89 5c 24 08 48 89 74 24 18',
+  RESOURCE_HANDLE_INIT: '40 53 48 83 ec 20 44 89 01 48 8b d9',
+  POSITION_TO_RESOURCE_KEY: '48 89 5c 24 08 48 89 6c 24 10',
+  SERVICE_LOCATOR_GET: '48 83 ec 28 80 3d ?? ?? ?? ?? 00',
+  SERVICE_LOCATOR_FIND: '40 53 48 83 ec 20 49 c7 01 00 00 00 00',
+  PROVIDER_REQUEST: '48 89 5c 24 08 48 89 6c 24 10',
+  PROVIDER_COMPLETION: '48 89 5c 24 08 48 89 74 24 20',
+  REQUEST_DESCRIPTOR_INIT: '48 8d 05 ?? ?? ?? ?? 48 89 01',
+  REQUEST_DESCRIPTOR_DESTROY: '48 89 5c 24 08 57 48 83 ec 20',
+  REQUEST_STAMP_THUNK: '48 8b 0d ?? ?? ?? ?? 48 81 c1 f0 00 00 00',
+  LAND_RESOURCE_BUILD: '48 89 5c 24 08 48 89 74 24 10',
+  LAND_RESIDENCY_UPDATE: '48 89 5c 24 08 48 89 6c 24 18',
+  LAND_RESIDENCY_LIMIT_PATCH: '41 83 fa 04 0f 86 ?? ?? ?? ??',
+  MAIN_THREAD_TICK: '48 8b c4 48 89 58 10 44 88 40 18',
+  SMARTBOX_LAND_UPDATE: '48 8b c4 48 89 58 08 48 89 70 10',
+  FAR_RADIUS_APPLY: '40 53 48 83 ec 20 48 8b 1d ?? ?? ?? ??',
+  CONSOLE_STRING_CONSTRUCT: '48 89 5c 24 20 57 48 83 ec 20',
+  CONSOLE_DISPATCH: '40 55 53 56 57 41 54 41 56 41 57',
+  GRAPHICS_RESOURCE_PURGE_BUDGET: '40 55 41 56 48 83 ec 58 b8 00 00 00 80',
+  ASYNC_CACHE_CONFIG_RESOLVE: '40 53 48 83 ec 20 65 48 8b 04 25 58 00 00 00',
+  OBJECT_DISTANCE_FUNCTION: '80 3d ?? ?? ?? ?? 00 8b 05 ?? ?? ?? ??',
+  MIP_BIAS_FUNCTION: '8b 05 ?? ?? ?? ?? 0f 57 c0 83 f8 02',
+  CAMERA_INPUT_TICK: '48 8b c4 55 53 56 57 41 54 41 56',
+  PUSH_CAMERA: '48 89 5c 24 08 57 48 81 ec b0 00 00 00',
+  POP_CAMERA: '48 89 5c 24 10 48 89 6c 24 18',
+  MAKE_FPS_SLOW: '40 55 53 56 57 48 8b ec 48 83 ec 48',
+  FLIGHT_MOVE_FORWARD: '40 53 48 81 ec 80 00 00 00 f3 0f 10 05 ?? ?? ??',
+  FLIGHT_MOVE_STRAFE: '40 53 48 81 ec 80 00 00 00 f3 0f 10 05 ?? ?? ??',
+  FLIGHT_MOVE_VERTICAL: '40 53 48 81 ec 80 00 00 00 f3 0f 10 05 ?? ?? ??',
+  T_SET_BYTE: '48 89 5c 24 08 48 89 74 24 10 57 48 83 ec',
+  T_SET_INT: '48 89 5c 24 08 48 89 74 24 10 57 48 83 ec',
+  OBJ_WRITER_A: 'f3 0f 11 05 ?? ?? ?? ??',
+  OBJ_WRITER_B: 'f3 0f 11 0d ?? ?? ?? ??',
 };
 
 const mod = Process.getModuleByName(MODULE_NAME);
-const build = BUILDS[mod.size];
-if (build === undefined) {
+
+// Build selection is NOT keyed on module size any more. 4900 and 4901 ship the
+// identical SizeOfImage (0x22bd000), so size alone cannot tell them apart and the
+// old lookup would silently hand out 4900 addresses to a 4901 client.
+//
+// Instead every candidate for this module size is scored against PROLOGUE: the
+// bytes actually mapped at each table's addresses are compared to the expected
+// opcodes. The table that matches everywhere is the right one. That is the same
+// check the script already relied on, just promoted to also pick the build - so a
+// wrong guess cannot get past it, and a future build that happens to reuse the
+// size is rejected rather than mis-detected.
+function selectBuild(base, size) {
+  const sized = BUILDS.filter(function (b) { return b.size === size; });
+  if (sized.length === 0) return { build: null, scores: [] };
+  const scores = sized.map(function (b) {
+    let hit = 0, total = 0;
+    Object.keys(PROLOGUE).forEach(function (name) {
+      const rva = b.rva[name];
+      if (rva === undefined || rva === null) return;
+      total++;
+      const want = PROLOGUE[name].split(' ');
+      let bytes;
+      try {
+        bytes = new Uint8Array(base.add(rva).readByteArray(want.length));
+      } catch (e) {
+        return;
+      }
+      for (let i = 0; i < want.length; i++) {
+        if (want[i] === '??') continue;
+        if (bytes[i] !== parseInt(want[i], 16)) return;
+      }
+      hit++;
+    });
+    return { build: b, hit: hit, total: total };
+  });
+  scores.sort(function (x, y) { return y.hit - x.hit; });
+  const best = scores[0];
+  // Demand a clean sweep. A partial match means the addresses moved.
+  if (best && best.total > 0 && best.hit === best.total) {
+    return { build: best.build, scores: scores };
+  }
+  return { build: null, scores: scores };
+}
+
+const picked = selectBuild(mod.base, mod.size);
+const build = picked.build;
+if (build === null) {
   throw new Error(
     'Unsupported LOTRO build: module size 0x' + mod.size.toString(16) +
-    '. Known: ' + Object.keys(BUILDS).map(function (s) {
-      return '0x' + Number(s).toString(16) + ' (' + BUILDS[s].name + ')';
-    }).join(', ')
+    (picked.scores.length
+      ? '. Prologue match: ' + picked.scores.map(function (s) {
+          return s.build.name + ' ' + s.hit + '/' + s.total;
+        }).join(', ') + ' - no table matched completely, so the addresses have moved.'
+      : '. Known: ' + BUILDS.map(function (b) {
+          return b.name + ' (0x' + b.size.toString(16) + ')';
+        }).join(', '))
   );
 }
 const A = build.rva;
@@ -551,50 +764,7 @@ const base = mod.base;
 // address table quietly points into the middle of something else, and hooking or
 // calling through it takes the client down. Reading the prologue back first turns
 // that into a refusal to start, with nothing hooked and nothing written.
-const PROLOGUE = {
-  POSITION_UPDATE_FUNCTION: '48 89 5c 24 08 55 48 8b ec 48 83 ec 60',
-  WORLD_CELL_PRIMARY: '48 89 5c 24 10 48 89 6c 24 20',
-  WORLD_CELL_SECONDARY: '48 89 5c 24 10 55 56 57 41 54',
-  WORLD_CELL_ENTER: '48 89 5c 24 10 48 89 74 24 20',
-  FRILL_CENTER_UPDATE: '48 8b c4 48 89 58 10 55 56 57',
-  FRILL_LOADER_UPDATE: '48 89 5c 24 08 55 56 57 41 54',
-  FRILL_SECTOR_REFRESH: '48 89 5c 24 18 4c 89 4c 24 20',
-  TERRAIN_TILE_REQUEST: '48 8b 89 e0 00 00 00 48 85 c9',
-  RESOURCE_UNWRAP: '4c 8b c1 48 8b 0d ?? ?? ?? ??',
-  RESOURCE_KEY_TO_ID: '48 89 5c 24 08 48 89 74 24 18',
-  RESOURCE_HANDLE_INIT: '40 53 48 83 ec 20 44 89 01 48 8b d9',
-  POSITION_TO_RESOURCE_KEY: '48 89 5c 24 08 48 89 6c 24 10',
-  SERVICE_LOCATOR_GET: '48 83 ec 28 80 3d ?? ?? ?? ?? 00',
-  SERVICE_LOCATOR_FIND: '40 53 48 83 ec 20 49 c7 01 00 00 00 00',
-  PROVIDER_REQUEST: '48 89 5c 24 08 48 89 6c 24 10',
-  PROVIDER_COMPLETION: '48 89 5c 24 08 48 89 74 24 20',
-  REQUEST_DESCRIPTOR_INIT: '48 8d 05 ?? ?? ?? ?? 48 89 01',
-  REQUEST_DESCRIPTOR_DESTROY: '48 89 5c 24 08 57 48 83 ec 20',
-  REQUEST_STAMP_THUNK: '48 8b 0d ?? ?? ?? ?? 48 81 c1 f0 00 00 00',
-  LAND_RESOURCE_BUILD: '48 89 5c 24 08 48 89 74 24 10',
-  LAND_RESIDENCY_UPDATE: '48 89 5c 24 08 48 89 6c 24 18',
-  LAND_RESIDENCY_LIMIT_PATCH: '41 83 fa 04 0f 86 ?? ?? ?? ??',
-  MAIN_THREAD_TICK: '48 8b c4 48 89 58 10 44 88 40 18',
-  SMARTBOX_LAND_UPDATE: '48 8b c4 48 89 58 08 48 89 70 10',
-  FAR_RADIUS_APPLY: '40 53 48 83 ec 20 48 8b 1d ?? ?? ?? ??',
-  CONSOLE_STRING_CONSTRUCT: '48 89 5c 24 20 57 48 83 ec 20',
-  CONSOLE_DISPATCH: '40 55 53 56 57 41 54 41 56 41 57',
-  GRAPHICS_RESOURCE_PURGE_BUDGET: '40 55 41 56 48 83 ec 58 b8 00 00 00 80',
-  ASYNC_CACHE_CONFIG_RESOLVE: '40 53 48 83 ec 20 65 48 8b 04 25 58 00 00 00',
-  OBJECT_DISTANCE_FUNCTION: '80 3d ?? ?? ?? ?? 00 8b 05 ?? ?? ?? ??',
-  MIP_BIAS_FUNCTION: '8b 05 ?? ?? ?? ?? 0f 57 c0 83 f8 02',
-  CAMERA_INPUT_TICK: '48 8b c4 55 53 56 57 41 54 41 56',
-  PUSH_CAMERA: '48 89 5c 24 08 57 48 81 ec b0 00 00 00',
-  POP_CAMERA: '48 89 5c 24 10 48 89 6c 24 18',
-  MAKE_FPS_SLOW: '40 55 53 56 57 48 8b ec 48 83 ec 48',
-  FLIGHT_MOVE_FORWARD: '40 53 48 81 ec 80 00 00 00 f3 0f 10 05 ?? ?? ??',
-  FLIGHT_MOVE_STRAFE: '40 53 48 81 ec 80 00 00 00 f3 0f 10 05 ?? ?? ??',
-  FLIGHT_MOVE_VERTICAL: '40 53 48 81 ec 80 00 00 00 f3 0f 10 05 ?? ?? ??',
-  T_SET_BYTE: '48 89 5c 24 08 48 89 74 24 10 57 48 83 ec',
-  T_SET_INT: '48 89 5c 24 08 48 89 74 24 10 57 48 83 ec',
-  OBJ_WRITER_A: 'f3 0f 11 05 ?? ?? ?? ??',
-  OBJ_WRITER_B: 'f3 0f 11 0d ?? ?? ?? ??',
-};
+
 
 const prologueMismatches = Object.keys(PROLOGUE).filter(function (name) {
   const parts = PROLOGUE[name].split(' ');

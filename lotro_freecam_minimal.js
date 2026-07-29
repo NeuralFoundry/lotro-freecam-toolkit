@@ -15,11 +15,12 @@
 // move speed) and both are restored on detach.
 //
 // Supported builds (see BUILDS below). The script picks its address table from the
-// module size, then re-checks the first bytes of every function it hooks or calls
+// prologue bytes, then re-checks the first bytes of every function it hooks or calls
 // before installing anything. If either check fails it refuses to run rather than
 // write to the wrong offsets.
 //
-//   4900.0070.8146.4007   module size 0x22bd000   <- current live client
+//   4901.0070.8449.4010   module size 0x22bd000   <- current live client
+//   4900.0070.8146.4007   module size 0x22bd000   (same size - see selectBuild)
 //   4808.0070.7360.4034   module size 0x22b4000
 'use strict';
 
@@ -30,8 +31,35 @@ const MODULE_NAME = 'lotroclient64.exe';
 // wildcarded) and then confirmed instruction-by-instruction over the full function body;
 // data addresses were resolved through their referencing instructions and cross-checked
 // across every xref site, all of which agreed.
-const BUILDS = {
-  0x22bd000: {
+const BUILDS = [
+  {
+    size: 0x22bd000,
+    name: '4901.0070.8449.4010',
+    rva: {
+      // Per-frame camera input tick. Hooked so movement is applied in step with the
+      // engine's own camera update rather than from a timer.
+      cameraInputTick: 0x976830,
+      // Camera stack push/pop. push returns a token that pop must be given back.
+      pushCamera: 0x976020,
+      popCamera: 0x97eec0,
+      // Puts the camera into the free-look mode the flight controller expects.
+      makeFpsSlow: 0x97d8a0,
+      // The engine's three movement axes. Each takes the controller and a signed delta.
+      // They are byte-identical to each other apart from the direction vector each reads
+      // (forward 0x156f060, strafe 0x156f050, vertical 0x156f070), which is what pins
+      // this ordering down.
+      moveForward: 0x97df20,
+      moveStrafe: 0x97e0a0,
+      moveVertical: 0x97e220,
+      // Used to confirm a resolved pointer really is a FlightCameraController.
+      flightVtable: 0x15701e0,
+      // Camera cvars: collision/physics, and the movement speed multiplier.
+      usePhysics: 0x1a157ea,
+      moveSpeedScale: 0x1a1589c
+    }
+  },
+  {
+    size: 0x22bd000,
     name: '4900.0070.8146.4007',
     rva: {
       // Per-frame camera input tick. Hooked so movement is applied in step with the
@@ -56,7 +84,8 @@ const BUILDS = {
       moveSpeedScale: 0x1a1589c
     }
   },
-  0x22b4000: {
+  {
+    size: 0x22b4000,
     name: '4808.0070.7360.4034',
     rva: {
       cameraInputTick: 0x973b00,
@@ -71,7 +100,7 @@ const BUILDS = {
       moveSpeedScale: 0x1a0c89c
     }
   }
-};
+];
 
 // First bytes of each function this script hooks or calls. '??' marks a byte that is a
 // rip displacement or a rel32 branch target - those move with the build, the rest do not.
@@ -119,13 +148,62 @@ const PRECISE_MULTIPLIER = 0.25;
 const FOREGROUND_POLL_MS = 50;
 
 const mod = Process.getModuleByName(MODULE_NAME);
-const build = BUILDS[mod.size];
-if (build === undefined) {
+
+// Build selection is NOT keyed on module size any more. 4900 and 4901 ship the
+// identical SizeOfImage (0x22bd000), so size alone cannot tell them apart and the
+// old lookup would silently hand out 4900 addresses to a 4901 client.
+//
+// Instead every candidate for this module size is scored against PROLOGUE: the
+// bytes actually mapped at each table's addresses are compared to the expected
+// opcodes. The table that matches everywhere is the right one. That is the same
+// check the script already relied on, just promoted to also pick the build - so a
+// wrong guess cannot get past it, and a future build that happens to reuse the
+// size is rejected rather than mis-detected.
+function selectBuild(base, size) {
+  const sized = BUILDS.filter(function (b) { return b.size === size; });
+  if (sized.length === 0) return { build: null, scores: [] };
+  const scores = sized.map(function (b) {
+    let hit = 0, total = 0;
+    Object.keys(PROLOGUE).forEach(function (name) {
+      const rva = b.rva[name];
+      if (rva === undefined || rva === null) return;
+      total++;
+      const want = PROLOGUE[name].split(' ');
+      let bytes;
+      try {
+        bytes = new Uint8Array(base.add(rva).readByteArray(want.length));
+      } catch (e) {
+        return;
+      }
+      for (let i = 0; i < want.length; i++) {
+        if (want[i] === '??') continue;
+        if (bytes[i] !== parseInt(want[i], 16)) return;
+      }
+      hit++;
+    });
+    return { build: b, hit: hit, total: total };
+  });
+  scores.sort(function (x, y) { return y.hit - x.hit; });
+  const best = scores[0];
+  // Demand a clean sweep. A partial match means the addresses moved.
+  if (best && best.total > 0 && best.hit === best.total) {
+    return { build: best.build, scores: scores };
+  }
+  return { build: null, scores: scores };
+}
+
+const picked = selectBuild(mod.base, mod.size);
+const build = picked.build;
+if (build === null) {
   throw new Error(
     'Unsupported LOTRO build: module size 0x' + mod.size.toString(16) +
-    '. Known: ' + Object.keys(BUILDS).map(function (s) {
-      return '0x' + Number(s).toString(16) + ' (' + BUILDS[s].name + ')';
-    }).join(', ')
+    (picked.scores.length
+      ? '. Prologue match: ' + picked.scores.map(function (s) {
+          return s.build.name + ' ' + s.hit + '/' + s.total;
+        }).join(', ') + ' - no table matched completely, so the addresses have moved.'
+      : '. Known: ' + BUILDS.map(function (b) {
+          return b.name + ' (0x' + b.size.toString(16) + ')';
+        }).join(', '))
   );
 }
 

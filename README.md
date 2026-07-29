@@ -407,24 +407,34 @@ on. That's really all there is to it.
 
 Possibly not, and I'd rather you knew that before installing anything.
 
-The addresses in these scripts are hardcoded per client build. Two are shipped, and the
-script picks the right table from the module size at startup:
+The addresses in these scripts are hardcoded per client build. Three are shipped, and the
+script picks the right table at startup by checking the bytes at each candidate's
+addresses (module size alone is no longer enough — see below):
 
 | Build | Module size | Notes |
 |---|---|---|
-| `4900.0070.8146.4007` | `0x22bd000` (36,315,136 bytes) | Current live client |
-| `4808.0070.7360.4034` | `0x22b4000` (36,258,816 bytes) | Previous |
+| `4901.0070.8449.4010` | `0x22bd000` (36,315,136 bytes) | Current live client |
+| `4900.0070.8146.4007` | `0x22bd000` (36,315,136 bytes) | Previous — **same module size as 4901** |
+| `4808.0070.7360.4034` | `0x22b4000` (36,258,816 bytes) | Older |
+
+**4900 and 4901 ship the identical module size.** That broke the original lookup, which
+keyed the address table on size alone and would have handed 4900 addresses to a 4901
+client. Build selection now scores each same-size candidate against the prologue table —
+the bytes actually mapped at each table's addresses — and takes the one that matches
+everywhere. A partial match is treated as "no match" and the script refuses to start.
+This is the case the previous README warned about, and it arrived one patch later.
 
 You can check your own copy in PowerShell:
 
 ```powershell
-(Get-Item "<path>\lotroclient64.exe").VersionInfo.FileVersion   # want 4900.0070.8146.4007
+(Get-Item "<path>\lotroclient64.exe").VersionInfo.FileVersion   # want 4901.0070.8449.4010
 ```
 
 If the size matches neither table, the script stops before touching anything:
 
 ```
-Error: Unsupported LOTRO build: module size 0x<size>. Known: 0x22bd000 (4900...), 0x22b4000 (4808...)
+Error: Unsupported LOTRO build: module size 0x<size>. Prologue match: 4901.0070.8449.4010
+20/42, 4900.0070.8146.4007 18/42 - no table matched completely, so the addresses have moved.
 ```
 
 That guard is there because running the wrong addresses would write garbage into random
@@ -443,6 +453,52 @@ offsets were derived - nothing was hooked, nothing was patched, and the game is 
 That is the check that actually protects you across a patch. A client update that keeps
 the module size the same but moves code would sail past the size check; it cannot get
 past the prologue check.
+
+### How the 4901 addresses were derived
+
+4901 was a small patch — but a real recompile, and every function this script touches
+moved. Unlike the 4808 to 4900 port, **both binaries were on disk** this time (the
+launcher keeps the previous client under `backup\x64\`), so the transfer was a direct
+binary-to-binary comparison rather than a reconstruction from a Ghidra dump.
+
+- **Functions (49).** Masked signature from the 4900 body — rip displacements and rel32
+  branch targets wildcarded — scanned against 4901 restricted to `.pdata` function
+  starts, then scored over the full body. 34 resolved to a single candidate outright;
+  the rest were separated by regional delta, because the shift is not one number:
+
+  | Region | Shift |
+  |---|---|
+  | below `0x8a2000` | `0` — unchanged |
+  | `0x8a2dd0` | `-736` |
+  | `0x93f000`–`0x998000` | `-960` |
+  | `0x115d000` | `-1056` |
+
+  All 49 came out at masked-body similarity `1.000`.
+
+- **The three flight axes** are byte-identical apart from the direction vector each
+  reads, so signature matching alone cannot order them. They were pinned twice over:
+  by regional delta, and independently by the vector each one loads — `0x156f060`
+  forward, `0x156f050` strafe, `0x156f070` vertical, unchanged from 4900 — with the
+  `0x180` spacing between them preserved.
+
+- **Globals (50).** Resolved through their referencing instructions, not assumed: every
+  rip-relative operand in both binaries was collected by walking `.pdata` function by
+  function, then each global's xref sites were transferred and re-decoded in 4901 and
+  made to vote. Every one was unanimous and **every one came out unchanged** — the data
+  sections did not move in this patch (`SMARTBOX_GLOBAL` 40/40 votes,
+  `LAND_RESOURCE_KEY_VTABLE` 29/29). `PLAYER_POSITION_COPY` has no direct xref in either
+  build; it is reached through a pointer stored at `0x1a151e0`, and that pointer holds
+  the identical value in both.
+
+- **Struct offsets** were re-checked rather than carried over. The memory displacement
+  sets of ten functions that touch `FrillEngine`, `SmartBox` and the camera machine are
+  identical between the two builds, so the field table is unchanged from 4900 — in
+  contrast to 4808 to 4900, where `FrillEngine` grew by `0x18`.
+
+A note on the linear-sweep trap, since it cost a wrong result on the first pass:
+handing the whole 21 MB `.text` to the disassembler in one buffer stops at the first
+byte of alignment padding, which yielded 5,522 rip targets instead of 108,119 and made
+every global look unreferenced. Disassembling per `.pdata` range is the fix.
 
 ### How the 4900 addresses were derived
 
@@ -908,28 +964,30 @@ speed), both restored on detach.
 Nine are installed in normal operation. Three more exist behind `DEEP_DIAGNOSTIC_HOOKS`,
 which is off.
 
-Addresses are given as **4900 / 4808**.
+Addresses are given as **4901 / 4900 / 4808**.
 
 | Target | Purpose |
 |---|---|
-| Main game tick (`0x974ee0` / `0x971df0`) | Runs all queued engine work, the HUD, and restore. The one place engine state is touched |
-| Mip bias function (`0x861bb0` / `0x860ff0`) | Writes the sharp-texture bias as samplers are built |
-| Provider completion (`0x4fecf0` / `0x4fe890`) | Marks a landblock's surface as finished so it isn't re-requested |
-| Position update (`0x54e470` / `0x54dfa0`) | Tracks the streaming target |
-| Camera input tick (`0x976bf0` / `0x973b00`) | Applies flight movement; detached when the camera stops |
-| Frill centre update (`0x959560` / `0x956470`) | Keeps the grass system centred on the camera |
-| Land resource build (`0x998810` / `0x995720`) | Retains land sources so they aren't evicted |
-| Resource unwrap (`0x34b4c0` / `0x34b460`) | Resolves land source handles |
-| SmartBox land update (`0x970b80` / `0x96da90`) | Forces the landscape origin when F6 is on |
+| Main game tick (`0x974b20` / `0x974ee0` / `0x971df0`) | Runs all queued engine work, the HUD, and restore. The one place engine state is touched |
+| Mip bias function (`0x861bb0` / `0x861bb0` / `0x860ff0`) | Writes the sharp-texture bias as samplers are built |
+| Provider completion (`0x4fecf0` / `0x4fecf0` / `0x4fe890`) | Marks a landblock's surface as finished so it isn't re-requested |
+| Position update (`0x54e470` / `0x54e470` / `0x54dfa0`) | Tracks the streaming target |
+| Camera input tick (`0x976830` / `0x976bf0` / `0x973b00`) | Applies flight movement; detached when the camera stops |
+| Frill centre update (`0x9591a0` / `0x959560` / `0x956470`) | Keeps the grass system centred on the camera |
+| Land resource build (`0x998450` / `0x998810` / `0x995720`) | Retains land sources so they aren't evicted |
+| Resource unwrap (`0x34b4c0` / `0x34b4c0` / `0x34b460`) | Resolves land source handles |
+| SmartBox land update (`0x9707c0` / `0x970b80` / `0x96da90`) | Forces the landscape origin when F6 is on |
 
 ### Globals it writes
 
 All are restored on detach.
 
-The whole cvar block moved by a flat `+0x9000` between the two builds, so the 4808
-column is the 4900 one minus `0x9000`.
+The whole cvar block moved by a flat `+0x9000` between 4808 and 4900, so the 4808
+column is the 4900 one minus `0x9000`. **4901 did not move any data at all**, so the
+4901 and 4900 columns are the same address — every one of the 50 globals was
+re-derived from its xrefs and came back unchanged.
 
-| 4900 | 4808 | What |
+| 4901 = 4900 | 4808 | What |
 |---|---|---|
 | `0x1a11fe4` / `0x1a11fe8` / `0x1a11ff8` | `0x1a08fe4` / `0x1a08fe8` / `0x1a08ff8` | Texture filtering, anisotropic quality, texture detail |
 | `0x1a11ffc` / `0x1a12000` | `0x1a08ffc` / `0x1a09000` | Material detail, model detail |
@@ -949,11 +1007,11 @@ This is the part worth reading closely if you're auditing, so here is all of it.
 site is saved before it is modified. All but one are restored on detach - the exception
 is called out below, because "it puts everything back" would not be quite true.
 
-| 4900 | 4808 | Size | When | What |
-|---|---|---|---|---|
-| `0x998b06` | `0x995a16` | 16 bytes | **On by default** | Land residency limit. Raises the engine's cap on how many landblocks may stay resident — without it the extended grass grid is evicted as fast as it loads. Both builds hold the same `cmp r10d, 4`, and it is the only one in the function |
-| `0x15738a4` | `0x156c404` | 4 bytes | **On by default** | Frill time budget multiplier. A float in read-only data, so it needs a page-protection change rather than a plain write. This is the grass loader's per-frame main-thread budget (`setfrillbudget`) |
-| `0x93fb36`, `0x93ff4d` | `0x93ca26`, `0x93ce3d` | 8 bytes each | Only with `objectboost` | The two per-frame writers to the object draw multiplier are NOPed so the value stays where it's put |
+| 4901 | 4900 | 4808 | Size | When | What |
+|---|---|---|---|---|---|
+| `0x998746` | `0x998b06` | `0x995a16` | 16 bytes | **On by default** | Land residency limit. Raises the engine's cap on how many landblocks may stay resident — without it the extended grass grid is evicted as fast as it loads. All three builds hold the same `cmp r10d, 4`, and it is the only one in the function |
+| `0x15738a4` | `0x15738a4` | `0x156c404` | 4 bytes | **On by default** | Frill time budget multiplier. A float in read-only data, so it needs a page-protection change rather than a plain write. This is the grass loader's per-frame main-thread budget (`setfrillbudget`). Unchanged in 4901 — no data moved |
+| `0x93f776`, `0x93fb8d` | `0x93fb36`, `0x93ff4d` | `0x93ca26`, `0x93ce3d` | 8 bytes each | Only with `objectboost` | The two per-frame writers to the object draw multiplier are NOPed so the value stays where it's put |
 
 The first two are active as soon as you attach, because grass is on by default. Turning
 `GRASS_MACHINERY` off at the top of the file disables both.
