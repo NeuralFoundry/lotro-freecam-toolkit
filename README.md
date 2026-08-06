@@ -413,7 +413,8 @@ addresses (module size alone is no longer enough — see below):
 
 | Build | Module size | Notes |
 |---|---|---|
-| `4901.0070.8449.4010` | `0x22bd000` (36,315,136 bytes) | Current live client |
+| `4902.0070.8649.4012` | `0x22bd000` (36,315,136 bytes) | Current live client — `.text` identical to 4901, uses its table |
+| `4901.0070.8449.4010` | `0x22bd000` (36,315,136 bytes) | Previous |
 | `4900.0070.8146.4007` | `0x22bd000` (36,315,136 bytes) | Previous — **same module size as 4901** |
 | `4808.0070.7360.4034` | `0x22b4000` (36,258,816 bytes) | Older |
 
@@ -427,7 +428,7 @@ This is the case the previous README warned about, and it arrived one patch late
 You can check your own copy in PowerShell:
 
 ```powershell
-(Get-Item "<path>\lotroclient64.exe").VersionInfo.FileVersion   # want 4901.0070.8449.4010
+(Get-Item "<path>\lotroclient64.exe").VersionInfo.FileVersion   # want 4902.0070.8649.4012 or 4901.0070.8449.4010
 ```
 
 If the size matches neither table, the script stops before touching anything:

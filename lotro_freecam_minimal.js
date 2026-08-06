@@ -19,7 +19,8 @@
 // before installing anything. If either check fails it refuses to run rather than
 // write to the wrong offsets.
 //
-//   4901.0070.8449.4010   module size 0x22bd000   <- current live client
+//   4902.0070.8649.4012   module size 0x22bd000   <- current live client (.text identical to 4901, uses its table)
+//   4901.0070.8449.4010   module size 0x22bd000
 //   4900.0070.8146.4007   module size 0x22bd000   (same size - see selectBuild)
 //   4808.0070.7360.4034   module size 0x22b4000
 'use strict';
@@ -34,7 +35,7 @@ const MODULE_NAME = 'lotroclient64.exe';
 const BUILDS = [
   {
     size: 0x22bd000,
-    name: '4901.0070.8449.4010',
+    name: '4901.0070.8449.4010 (= 4902.0070.8649.4012)',
     rva: {
       // Per-frame camera input tick. Hooked so movement is applied in step with the
       // engine's own camera update rather than from a timer.
