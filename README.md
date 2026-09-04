@@ -30,29 +30,15 @@ my word for anything below. There's a whole section on that further down.
 >
 > The longer version is in [One thing to know first](#one-thing-to-know-first).
 
-virustotal:
+Current compatibility: **4905.0070.9961.4022**, verified against the installed EXE
+on 2026-09-05. See [the verification report](BUILD_4905_VERIFICATION.md) and
+[current package SHA-256 hashes](SHA256SUMS.txt).
+
+Historical VirusTotal links (older script files, not scans of this updated package):
 
 https://www.virustotal.com/gui/file/5c42c7d1a1e663a0c1395ae3b1dff3002ad6c6a6197505a1ee8f95d02b224fa0?nocache=1 5c42c7d1a1e663a0c1395ae3b1dff3002ad6c6a6197505a1ee8f95d02b224fa0 lotro_freecam_minimal.js
 
 https://www.virustotal.com/gui/file/b95e27d78dc30042b02206cea569778cba5c66661bd4d63a4e90bd116d91bb86?nocache=1 b95e27d78dc30042b02206cea569778cba5c66661bd4d63a4e90bd116d91bb86 lotro_freecam_cinematic.js
-
-lotro_freecam_minimal.js
-
-SHA-256 5c42c7d1a1e663a0c1395ae3b1dff3002ad6c6a6197505a1ee8f95d02b224fa0
-
-SHA-1 67d6e4aebb8cccaf07a74cc766bf26777d148451
-
-MD5 afc50d49ba9adeede1c9cf6b931cfe43
-
-Size 11.223 bayt
-
-lotro_freecam_cinematic.js
-
-SHA-256 b95e27d78dc30042b02206cea569778cba5c66661bd4d63a4e90bd116d91bb86
-
-SHA-1 bef8aa154b6a7e9340608271636c2aafd4d29de0
-
-MD5 03d1101088c38fc17cba5caaf314c82f
 
 ## Which file do you want?
 
@@ -255,23 +241,8 @@ Confirm you have the file I'm describing:
 Get-FileHash .\lotro_freecam_minimal.js -Algorithm SHA256
 ```
 
-**`lotro_freecam_minimal.js`** — camera only
-
-```
-SHA-256  5c42c7d1a1e663a0c1395ae3b1dff3002ad6c6a6197505a1ee8f95d02b224fa0
-SHA-1    67d6e4aebb8cccaf07a74cc766bf26777d148451
-MD5      afc50d49ba9adeede1c9cf6b931cfe43
-Size     11,223 bytes
-```
-
-**`lotro_freecam_cinematic.js`** — camera + extended render distance + overlay
-
-```
-SHA-256  b95e27d78dc30042b02206cea569778cba5c66661bd4d63a4e90bd116d91bb86
-SHA-1    bef8aa154b6a7e9340608271636c2aafd4d29de0
-MD5      03d1101088c38fc17cba5caaf314c82f
-Size     228,180 bytes
-```
+Compare the result with [SHA256SUMS.txt](SHA256SUMS.txt), which lists the current
+minimal script, cinematic script, launchers, installer and documentation.
 
 **`Start LOTRO Freecam.bat`** — optional launcher
 
@@ -282,8 +253,8 @@ MD5      d04c5d1c78aa26acb9c2fa813745914e
 Size     2,958 bytes
 ```
 
-If it doesn't match, you have a different file and nothing in this README applies to it.
-There are VirusTotal scans in the [Is it safe?](#is-it-safe) section.
+If it doesn't match, you have a different revision of the file. The VirusTotal links
+in [Is it safe?](#is-it-safe) refer to older releases, not this updated package.
 
 A word on the `.bat` in particular: a batch file that asks for administrator rights is
 exactly the shape a lot of malware takes, and you're right to look at it twice. It's 90
@@ -407,16 +378,18 @@ on. That's really all there is to it.
 
 Possibly not, and I'd rather you knew that before installing anything.
 
-The addresses in these scripts are hardcoded per client build. Three are shipped, and the
+The addresses in these scripts are hardcoded per client build. Three address tables cover
+the five verified builds below, and the
 script picks the right table at startup by checking the bytes at each candidate's
 addresses (module size alone is no longer enough — see below):
 
 | Build | Module size | Notes |
 |---|---|---|
-| `4902.0070.8649.4012` | `0x22bd000` (36,315,136 bytes) | Current live client — `.text` identical to 4901, uses its table |
-| `4901.0070.8449.4010` | `0x22bd000` (36,315,136 bytes) | Previous |
-| `4900.0070.8146.4007` | `0x22bd000` (36,315,136 bytes) | Previous — **same module size as 4901** |
-| `4808.0070.7360.4034` | `0x22b4000` (36,258,816 bytes) | Older |
+| `4905.0070.9961.4022` | `0x22bd000` (36,425,728 bytes) | Current verified client; shares the 4901 table; see report below |
+| `4902.0070.8649.4012` | `0x22bd000` (36,425,728 bytes) | Previous; `.text` identical to 4901, uses its table |
+| `4901.0070.8449.4010` | `0x22bd000` (36,425,728 bytes) | Previous |
+| `4900.0070.8146.4007` | `0x22bd000` (36,425,728 bytes) | Previous — **same module size as 4901** |
+| `4808.0070.7360.4034` | `0x22b4000` (36,388,864 bytes) | Older |
 
 **4900 and 4901 ship the identical module size.** That broke the original lookup, which
 keyed the address table on size alone and would have handed 4900 addresses to a 4901
@@ -428,7 +401,7 @@ This is the case the previous README warned about, and it arrived one patch late
 You can check your own copy in PowerShell:
 
 ```powershell
-(Get-Item "<path>\lotroclient64.exe").VersionInfo.FileVersion   # want 4902.0070.8649.4012 or 4901.0070.8449.4010
+(Get-Item "<path>\lotroclient64.exe").VersionInfo.FileVersion   # latest verified: 4905.0070.9961.4022
 ```
 
 If the size matches neither table, the script stops before touching anything:
@@ -454,6 +427,24 @@ offsets were derived - nothing was hooked, nothing was patched, and the game is 
 That is the check that actually protects you across a patch. A client update that keeps
 the module size the same but moves code would sail past the size check; it cannot get
 past the prologue check.
+
+### Verification of 4905
+
+The installed `4905.0070.9961.4022` EXE was compared directly with the archived
+`4901.0070.8449.4010` EXE. Their complete `.text`, `.data`, `.pdata` and `.reloc`
+sections are byte-identical at identical RVAs. All 42 cinematic code addresses and
+all 47 data addresses remain valid; the 64-byte window at each data address is also
+identical. Only 27 bytes differ in `.rdata`, outside these data windows. `.rsrc`
+differs as well. No address or structure-offset migration is needed for this build.
+
+The actual build-selection code passes offline with **7/7** minimal and **42/42**
+cinematic prologue checks. The earlier 4900 table only matches 0/7 and 20/42,
+respectively, so it is not selected. No 4903 or 4904 compatibility claim is made.
+
+This update records verified 4905 support while preserving the existing movement,
+render settings and checks. The game was closed during verification, so in-game
+flight, streaming and FPS were not tested in this update. Full evidence and EXE
+hashes: [BUILD_4905_VERIFICATION.md](BUILD_4905_VERIFICATION.md).
 
 ### How the 4901 addresses were derived
 
@@ -965,7 +956,8 @@ speed), both restored on detach.
 Nine are installed in normal operation. Three more exist behind `DEEP_DIAGNOSTIC_HOOKS`,
 which is off.
 
-Addresses are given as **4901 / 4900 / 4808**.
+Addresses are given as **4901 / 4900 / 4808**. The 4901 column also applies to the
+verified 4902 and 4905 builds.
 
 | Target | Purpose |
 |---|---|
@@ -1121,23 +1113,9 @@ what the script openly does.
 
 ### File hashes
 
-`lotro_freecam_minimal.js`
-
-```
-SHA-256  5c42c7d1a1e663a0c1395ae3b1dff3002ad6c6a6197505a1ee8f95d02b224fa0
-SHA-1    67d6e4aebb8cccaf07a74cc766bf26777d148451
-MD5      afc50d49ba9adeede1c9cf6b931cfe43
-Size     11,223 bytes
-```
-
-`lotro_freecam_cinematic.js`
-
-```
-SHA-256  b95e27d78dc30042b02206cea569778cba5c66661bd4d63a4e90bd116d91bb86
-SHA-1    bef8aa154b6a7e9340608271636c2aafd4d29de0
-MD5      03d1101088c38fc17cba5caaf314c82f
-Size     228,180 bytes
-```
+The links above are historical scan results for older script revisions. No new
+VirusTotal scan was submitted for the 4905 update. The current package hashes are
+in [SHA256SUMS.txt](SHA256SUMS.txt).
 
 ```powershell
 Get-FileHash .\lotro_freecam_minimal.js -Algorithm SHA256
