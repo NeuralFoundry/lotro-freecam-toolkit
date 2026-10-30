@@ -63,13 +63,16 @@ echo   Which one?
 echo.
 echo     [1]  Minimal    free camera only. No render changes, no FPS cost.
 echo     [2]  Cinematic  camera plus extended draw distance, grass and terrain.
+echo     [3]  Lite       camera plus light terrain streaming (wider bubble, low cost).
 echo.
 set "PICK="
-set /p "PICK=  Pick 1 or 2 (enter = 1): "
+set /p "PICK=  Pick 1, 2 or 3 (enter = 1): "
 if not defined PICK set "PICK=1"
 
 if "%PICK%"=="2" (
     set "SCRIPT=lotro_freecam_cinematic.js"
+) else if "%PICK%"=="3" (
+    set "SCRIPT=lotro_freecam_lite.js"
 ) else (
     set "SCRIPT=lotro_freecam_minimal.js"
 )
