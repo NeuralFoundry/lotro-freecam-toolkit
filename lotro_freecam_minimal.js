@@ -19,6 +19,7 @@
 // before installing anything. If either check fails it refuses to run rather than
 // write to the wrong offsets.
 //
+//   5000.0071.3771.4007   module size 0x22d6000   <- ported & offline-verified 2026-10-30
 //   4905.0070.9961.4022   module size 0x22bd000   <- verified 2026-09-05; shared 4901 table
 //   4902.0070.8649.4012   module size 0x22bd000   (.text identical to 4901, uses its table)
 //   4901.0070.8449.4010   module size 0x22bd000
@@ -34,6 +35,22 @@ const MODULE_NAME = 'lotroclient64.exe';
 // data addresses were resolved through their referencing instructions and cross-checked
 // across every xref site, all of which agreed.
 const BUILDS = [
+  {
+    size: 0x22d6000,
+    name: '5000.0071.3771.4007',
+    rva: {
+      cameraInputTick: 0x97d540,
+      pushCamera: 0x97cd30,
+      popCamera: 0x985bd0,
+      makeFpsSlow: 0x9845b0,
+      moveForward: 0x984c30,
+      moveStrafe: 0x984db0,
+      moveVertical: 0x984f30,
+      flightVtable: 0x1584ae0,
+      usePhysics: 0x1a2d80a,
+      moveSpeedScale: 0x1a2d8bc
+    }
+  },
   {
     size: 0x22bd000,
     name: '4901.0070.8449.4010 (= 4902.0070.8649.4012, 4905.0070.9961.4022)',
