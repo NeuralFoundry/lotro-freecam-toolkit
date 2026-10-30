@@ -1,21 +1,22 @@
-// LOTRO Freecam (lite) - free-flying camera + LIGHT terrain streaming.
+// LOTRO Freecam (lite) - free-flying camera + LIGHT camera-follow streaming.
 //
-// This is the minimal camera plus one thing: it widens the engine's own land-streaming
-// radius so the world keeps rendering as you fly out, WITHOUT the cinematic script's
-// heavy grass/frill/provider/cache machinery (which is what loads the client down).
-// Renderer/streaming and camera only: no player position, physics, packet or network
-// writes. Your character does not move and nothing is sent to the server.
+// This is the minimal camera plus ONE light thing: the engine's land-streaming centre
+// follows the CAMERA instead of staying frozen on your character. The streaming bubble
+// keeps its NORMAL (native) size and quality - we do NOT widen the draw distance, touch
+// grass/frill, or run the cinematic script's heavy provider/residency/cache machinery.
+// So the world keeps rendering wherever you fly, at the normal render distance, with no
+// FPS drop. Renderer/streaming and camera only: no player position, physics, packet or
+// network writes. Your character does not move and nothing is sent to the server.
 //
-// What it does and does NOT do:
-//   - It enlarges the streaming bubble around YOUR CHARACTER (up to ~32 landblocks).
-//     Fly the camera anywhere inside that bubble and terrain/static scenery render.
-//   - It does NOT re-center streaming on the camera itself. Fly far beyond the bubble
-//     and it still thins out - that true camera-following needs the full cinematic.
-//   This is the old light behaviour: a big resident bubble, cheap on the client.
+// How it works (same core the cinematic script uses, stripped to the light part):
+//   - LoadWorldForPlayer (SmartBox+0x250) is pinned to 0 so the engine stops re-centring
+//     the stream on the player each frame.
+//   - Each land update we write the CAMERA's world position into the engine's cached
+//     land origin, so the native-size streaming ring recentres on the camera.
+//   - We NEVER change the far/near radius (streamObject+0x38/+0x3c) or the override
+//     radius (SmartBox+0x243/+0x244). Render distance stays exactly native = light.
 //
 // Addresses are 5000.0071.3771.4007 (module size 0x22d6000), ported & prologue-checked.
-// SmartBox field offsets (0x243/0x244, stream +0x20/+0x38/+0x3c) are the ones the
-// working cinematic uses on this exact build.
 'use strict';
 
 const MODULE_NAME = 'lotroclient64.exe';
@@ -36,10 +37,10 @@ const BUILDS = [
       flightVtable: 0x1584ae0,
       usePhysics: 0x1a2d80a,
       moveSpeedScale: 0x1a2d8bc,
-      // light streaming
-      smartBoxGlobal: 0x1e6ad10,   // land-stream manager global
-      farRadiusApply: 0x9766c0,    // applies range changes (called on the main tick)
-      mainThreadTick: 0x97b830     // per-frame tick (apply point)
+      // light camera-follow streaming
+      smartBoxGlobal: 0x1e6ad10,     // land-stream manager global
+      smartBoxLandUpdate: 0x9774d0,  // runs each land update; we redirect its origin here
+      cachedLandOrigin: 0x1a2d7a0    // engine's cached landscape origin (we force it to the camera)
     }
   }
 ];
@@ -53,8 +54,7 @@ const PROLOGUE = {
   moveForward: '40 53 48 81 ec 80 00 00 00 f3 0f 10 05 ?? ?? ??',
   moveStrafe: '40 53 48 81 ec 80 00 00 00 f3 0f 10 05 ?? ?? ??',
   moveVertical: '40 53 48 81 ec 80 00 00 00 f3 0f 10 05 ?? ?? ??',
-  farRadiusApply: '40 53 48 83 ec 20 48 8b 1d ?? ?? ?? ??',
-  mainThreadTick: '48 8b c4 48 89 58 10 44 88 40 18'
+  smartBoxLandUpdate: '48 8b c4 48 89 58 08 48 89 70 10'
 };
 
 const VK = {
@@ -66,11 +66,7 @@ const MAX_FRAME_DELTA = 0.05;
 const FAST_MULTIPLIER = 4.0;
 const PRECISE_MULTIPLIER = 0.25;
 const FOREGROUND_POLL_MS = 50;
-
-// Streaming bubble radius in landblocks (160 units each). 32 is the engine's practical
-// ceiling; past it the resident budget thrashes with no visible gain. setRadius() moves it.
-let STREAM_RADIUS = 24;
-const STREAM_RADIUS_MAX = 32;
+const BLOCK_SIZE = 160.0;
 
 const mod = Process.getModuleByName(MODULE_NAME);
 
@@ -119,7 +115,6 @@ if (build === null) {
 
 const base = mod.base;
 const RVA = build.rva;
-const NULL = ptr(0);
 
 function log(m) { console.log('[freecam-lite] ' + m); }
 
@@ -140,10 +135,20 @@ const flightVtable = base.add(RVA.flightVtable);
 const originalUsePhysics = usePhysics.readU8();
 const originalMoveSpeedScale = moveSpeedScale.readFloat();
 
-// ---- light streaming over the engine's SmartBox land manager ----
+// ---- light camera-follow streaming over the engine's SmartBox land manager ----
 const smartBoxGlobal = base.add(RVA.smartBoxGlobal);
-const farRadiusApply = new NativeFunction(base.add(RVA.farRadiusApply), 'void', []);
-let smartBox = NULL, streamObject = NULL, streamSaved = null, streamOn = false, applyPending = false;
+const smartBoxLandUpdate = base.add(RVA.smartBoxLandUpdate);
+const cachedLandOrigin = base.add(RVA.cachedLandOrigin);
+
+let smartBox = NULL;
+let originalLoadWorldForPlayer = null;   // SmartBox+0x250 baseline
+let cameraCenteredApplied = false;
+let landOriginForceEnabled = false;
+let landOriginBaseline = null;
+let landOriginWriteCount = 0;
+
+// the stream centre we steer; seeded from the player, then moved by camera deltas
+const target = { x: 0, y: 0, z: 0, blockX: 0, blockY: 0, region: 0, valid: false };
 
 function looksPtr(p) {
   try { return !p.isNull() && p.compare(ptr('0x10000')) > 0 && p.compare(ptr('0x7fffffffffff')) < 0; }
@@ -152,49 +157,124 @@ function looksPtr(p) {
 function resolveSmartBox() {
   try {
     const sb = smartBoxGlobal.readPointer();
-    if (!looksPtr(sb)) return false;
-    const root = sb.readPointer();
-    const so = looksPtr(root) ? root.add(0x20).readPointer() : NULL;
-    if (smartBox.isNull() || !sb.equals(smartBox)) {
-      smartBox = sb;
-      streamObject = looksPtr(so) ? so : NULL;
-      if (streamSaved === null && !streamObject.isNull()) {
-        streamSaved = {
-          en: sb.add(0x243).readU8(), rad: sb.add(0x244).readU32(),
-          far: streamObject.add(0x38).readU32(), near: streamObject.add(0x3c).readU32()
-        };
-      }
-    }
+    if (!looksPtr(sb)) { smartBox = NULL; return false; }
+    smartBox = sb;
     return true;
-  } catch (_) { smartBox = NULL; streamObject = NULL; return false; }
+  } catch (_) { smartBox = NULL; return false; }
 }
-// Matches the working light approach (cinematic_stream2): widen the override radius and
-// the stream object's far radius; do NOT touch LoadWorldForPlayer (leaving it player-
-// centred is what actually keeps the bubble filled). farRadiusApply() commits it.
-function applyStream() {
+
+// a land-position struct: fields (valid/block/region) then 3 world-coord floats.
+// SmartBox+0x80 carries a vtable (hasVtable=true); the cached origin global does not.
+function readLandPosition(address, hasVtable) {
+  const fields = hasVtable ? address.add(8) : address;
+  const coords = hasVtable ? address.add(0x18) : address.add(0x10);
+  try {
+    return {
+      valid: fields.readU32(),
+      blockX: fields.add(4).readU8(),
+      blockY: fields.add(5).readU8(),
+      region: fields.add(6).readU16(),
+      x: coords.readFloat(),
+      y: coords.add(4).readFloat(),
+      z: coords.add(8).readFloat()
+    };
+  } catch (_) { return null; }
+}
+function writeCachedLandPosition(position) {
+  cachedLandOrigin.add(4).writeU8(position.blockX);
+  cachedLandOrigin.add(5).writeU8(position.blockY);
+  cachedLandOrigin.add(6).writeU16(position.region);
+  cachedLandOrigin.add(0x10).writeFloat(position.x);
+  cachedLandOrigin.add(0x14).writeFloat(position.y);
+  cachedLandOrigin.add(0x18).writeFloat(position.z);
+}
+
+function primeRenderTargetFromPlayer() {
+  if (!resolveSmartBox()) return false;
+  const position = readLandPosition(smartBox.add(0x80), true);
+  if (position === null || ![position.x, position.y, position.z].every(Number.isFinite)) return false;
+  target.x = position.x; target.y = position.y; target.z = position.z;
+  target.blockX = position.blockX; target.blockY = position.blockY; target.region = position.region;
+  target.valid = true;
+  log('anchor region=' + target.region + ' block=' + target.blockX + ',' + target.blockY +
+    ' local=' + target.x.toFixed(1) + ',' + target.y.toFixed(1) + ',' + target.z.toFixed(1));
+  return true;
+}
+function normalizeRenderTarget() {
+  while (target.x >= BLOCK_SIZE) { target.x -= BLOCK_SIZE; target.blockX = (target.blockX + 1) & 0xff; }
+  while (target.x < 0)          { target.x += BLOCK_SIZE; target.blockX = (target.blockX - 1) & 0xff; }
+  while (target.y >= BLOCK_SIZE) { target.y -= BLOCK_SIZE; target.blockY = (target.blockY + 1) & 0xff; }
+  while (target.y < 0)          { target.y += BLOCK_SIZE; target.blockY = (target.blockY - 1) & 0xff; }
+}
+function syncRenderTargetToFlight(before, after) {
+  if (!target.valid || before === null || after === null) return;
+  const dx = after.x - before.x, dy = after.y - before.y, dz = after.z - before.z;
+  if (![dx, dy, dz].every(Number.isFinite)) return;
+  target.x += dx; target.y += dy; target.z += dz;
+  normalizeRenderTarget();
+}
+
+function resolveFlightController(machine) {
+  try {
+    let state = machine.add(0x30).readPointer();
+    if (state.isNull()) {
+      const head = machine.add(0x10).readPointer();
+      if (head.isNull()) return NULL;
+      state = head.readPointer();
+    }
+    if (state.isNull()) return NULL;
+    const c = state.add(0x70).readPointer();
+    if (c.isNull() || !c.readPointer().equals(flightVtable)) return NULL;
+    return c;
+  } catch (_) { return NULL; }
+}
+function resolveFlightPositionPointer(c) {
+  try {
+    const cameraInterface = c.add(0x18);
+    const vtable = cameraInterface.readPointer();
+    const getterAddress = vtable.add(0x50).readPointer();
+    if (!looksPtr(getterAddress)) return NULL;
+    const getter = new NativeFunction(getterAddress, 'pointer', ['pointer']);
+    const position = getter(cameraInterface);
+    return looksPtr(position) ? position : NULL;
+  } catch (_) { return NULL; }
+}
+function readFlightPosition() {
+  if (flightPositionPointer.isNull()) return null;
+  try {
+    const p = { x: flightPositionPointer.readFloat(), y: flightPositionPointer.add(4).readFloat(), z: flightPositionPointer.add(8).readFloat() };
+    return [p.x, p.y, p.z].every(Number.isFinite) ? p : null;
+  } catch (_) { return null; }
+}
+
+// Pin SmartBox+0x250 (LoadWorldForPlayer) to 0 so the engine stops re-centring the
+// stream on the player; our land-origin write then centres it on the camera.
+function setCameraCentered(on) {
   if (!resolveSmartBox()) return;
   try {
-    smartBox.add(0x243).writeU8(1);
-    smartBox.add(0x244).writeU32(STREAM_RADIUS);
-    if (!streamObject.isNull()) streamObject.add(0x38).writeU32(STREAM_RADIUS);
-    applyPending = true;
+    if (on) {
+      if (originalLoadWorldForPlayer === null) originalLoadWorldForPlayer = smartBox.add(0x250).readU8();
+      if (!cameraCenteredApplied || smartBox.add(0x250).readU8() !== 0) {
+        smartBox.add(0x250).writeU8(0);
+        cameraCenteredApplied = true;
+      }
+    } else if (originalLoadWorldForPlayer !== null) {
+      smartBox.add(0x250).writeU8(originalLoadWorldForPlayer);
+      cameraCenteredApplied = false;
+    }
   } catch (_) {}
 }
-function enableStream() { streamOn = true; applyStream(); log('stream ON radius=' + STREAM_RADIUS + ' blocks (~' + (STREAM_RADIUS * 160) + 'u bubble around your character)'); }
-function disableStream() {
-  streamOn = false;
-  if (resolveSmartBox() && streamSaved) {
-    try {
-      smartBox.add(0x243).writeU8(streamSaved.en);
-      smartBox.add(0x244).writeU32(streamSaved.rad);
-      if (!streamObject.isNull()) {
-        streamObject.add(0x38).writeU32(streamSaved.far);
-        streamObject.add(0x3c).writeU32(streamSaved.near);
-      }
-      applyPending = true;
-    } catch (_) {}
-  }
-  log('stream OFF (original radius restored)');
+function enableLandOriginForce() {
+  if (landOriginForceEnabled) return;
+  landOriginBaseline = readLandPosition(cachedLandOrigin, false);
+  landOriginForceEnabled = true;
+  log('camera-follow ON - cached land origin follows the freecam (native render distance).');
+}
+function disableLandOriginForce() {
+  if (!landOriginForceEnabled) return;
+  landOriginForceEnabled = false;
+  if (landOriginBaseline !== null) { try { writeCachedLandPosition(landOriginBaseline); } catch (_) {} }
+  landOriginBaseline = null;
 }
 
 const foregroundProcessId = Memory.alloc(4);
@@ -214,22 +294,8 @@ function isLotroForeground() {
 }
 function down(vk) { if (!isLotroForeground()) return false; return (getAsyncKeyState(vk) & 0x8000) !== 0; }
 
-function resolveFlightController(machine) {
-  try {
-    let state = machine.add(0x30).readPointer();
-    if (state.isNull()) {
-      const head = machine.add(0x10).readPointer();
-      if (head.isNull()) return NULL;
-      state = head.readPointer();
-    }
-    if (state.isNull()) return NULL;
-    const controller = state.add(0x70).readPointer();
-    if (controller.isNull() || !controller.readPointer().equals(flightVtable)) return NULL;
-    return controller;
-  } catch (_) { return NULL; }
-}
-
-let machine = NULL, controller = NULL, token = 0, active = false, f8WasDown = false;
+let machine = NULL, controller = NULL, flightPositionPointer = NULL, flightLastPosition = null;
+let token = 0, active = false, f8WasDown = false;
 let lastTickAt = 0, stopRequested = false, cleanupComplete = false, cvarsModified = false, hook = null;
 
 function restoreCvars() {
@@ -245,30 +311,36 @@ function enableFlight() {
   cvarsModified = true;
   token = pushCamera(machine, 4, 0, 0.2, 0.2);
   controller = resolveFlightController(machine);
+  if (!controller.isNull()) flightPositionPointer = resolveFlightPositionPointer(controller);
+  flightLastPosition = null;
   active = true;
   lastTickAt = Date.now();
-  enableStream();                        // widen the render bubble together with flight
+  primeRenderTargetFromPlayer();
+  setCameraCentered(true);               // stream centre follows the camera, native radius
+  enableLandOriginForce();
   log('ON  token=' + token + '  speed=' + FLIGHT_SPEED + '  (Ctrl+F8 to stop)');
 }
 function disableFlight(reason) {
   if (!active) return;
   popCamera(machine, token, 0, 0);
   restoreCvars();
-  disableStream();
-  controller = NULL; active = false; token = 0;
+  disableLandOriginForce();
+  setCameraCentered(false);
+  controller = NULL; flightPositionPointer = NULL; flightLastPosition = null;
+  target.valid = false; active = false; token = 0;
   log('OFF (' + reason + ')');
 }
 
-// apply queued streaming changes on the engine's own tick (safe thread/timing)
-Interceptor.attach(base.add(RVA.mainThreadTick), {
-  onEnter: function () {
-    if (!applyPending) return;
-    applyPending = false;
-    try { farRadiusApply(); } catch (e) { log('apply error ' + e); }
+// the land update runs constantly; when flying, redirect its cached origin to the camera
+Interceptor.attach(smartBoxLandUpdate, {
+  onEnter: function (args) {
+    if (!landOriginForceEnabled || !active || !target.valid || !args[1].isNull()) return;
+    try { writeCachedLandPosition(target); landOriginWriteCount++; }
+    catch (e) { log('land origin error ' + e); disableLandOriginForce(); }
   }
 });
-// the engine resets the override; re-assert it a few times a second while on
-setInterval(function () { if (streamOn) applyStream(); }, 400);
+// the engine re-centres LoadWorldForPlayer; re-pin it a few times a second while flying
+setInterval(function () { if (active) setCameraCentered(true); }, 400);
 
 hook = Interceptor.attach(base.add(RVA.cameraInputTick), {
   onEnter(args) { this.machine = args[1]; },
@@ -282,8 +354,12 @@ hook = Interceptor.attach(base.add(RVA.cameraInputTick), {
     }
     f8WasDown = f8IsDown;
     if (!active) return;
-    if (controller.isNull()) controller = resolveFlightController(machine);
-    if (controller.isNull()) return;
+    if (controller.isNull()) {
+      controller = resolveFlightController(machine);
+      if (!controller.isNull()) flightPositionPointer = resolveFlightPositionPointer(controller);
+    }
+    if (controller.isNull() || flightPositionPointer.isNull()) return;
+    if (!target.valid) primeRenderTargetFromPlayer();
     const now = Date.now();
     let dt = (now - lastTickAt) / 1000.0;
     lastTickAt = now;
@@ -296,17 +372,22 @@ hook = Interceptor.attach(base.add(RVA.cameraInputTick), {
     const forward = (down(VK.FORWARD) ? 1 : 0) - (down(VK.BACKWARD) ? 1 : 0);
     const strafe = (down(VK.STRAFE_RIGHT) ? 1 : 0) - (down(VK.STRAFE_LEFT) ? 1 : 0);
     const vertical = (down(VK.UP) ? 1 : 0) - (down(VK.DOWN) ? 1 : 0);
+    if (forward === 0 && strafe === 0 && vertical === 0) { return; }
+    const before = flightLastPosition === null ? readFlightPosition() : flightLastPosition;
     if (forward !== 0) moveForward(controller, forward * dt);
     if (strafe !== 0) moveStrafe(controller, strafe * dt);
     if (vertical !== 0) moveVertical(controller, vertical * dt);
+    const after = readFlightPosition();
+    syncRenderTargetToFlight(before, after);
+    if (after !== null) flightLastPosition = after;
   }
 });
 
-log('=== LOTRO FREECAM (lite - camera + light streaming) ===');
+log('=== LOTRO FREECAM (lite - camera + light camera-follow streaming) ===');
 log('build ' + build.name + '  (module size 0x' + mod.size.toString(16) + ')');
 log('Ctrl+F8 start/stop | mouse look | LShift 4x | LCtrl precise');
 log('Move  P fwd | ;/S back | L left | \'/I right | O up | [/G down');
-log('Streaming bubble ~' + STREAM_RADIUS + ' landblocks; rpc setRadius(3..' + STREAM_RADIUS_MAX + '). Character never moves.');
+log('Streaming centre follows the camera at NATIVE render distance. Character never moves.');
 
 rpc.exports = {
   requestRestore: function () { stopRequested = true; cleanupComplete = false; return true; },
@@ -316,25 +397,19 @@ rpc.exports = {
     try { if (hook !== null) hook.detach(); } catch (_) {}
     hook = null;
     restoreCvars();
-    disableStream();
+    disableLandOriginForce();
+    setCameraCentered(false);
     log('restore complete (active=' + active + ')');
     return !active;
   },
-  setRadius: function (r) {
-    r = Math.max(3, Math.min(STREAM_RADIUS_MAX, r | 0));
-    STREAM_RADIUS = r;
-    if (streamOn) applyStream();
-    log('radius=' + STREAM_RADIUS + ' blocks (~' + (STREAM_RADIUS * 160) + 'u)');
-    return STREAM_RADIUS;
-  },
   status: function () {
-    let far = -1, rad = -1;
-    if (resolveSmartBox()) {
-      try { far = streamObject.isNull() ? -1 : streamObject.add(0x38).readU32(); rad = smartBox.add(0x244).readU32(); } catch (_) {}
-    }
+    let loadForPlayer = -1;
+    if (resolveSmartBox()) { try { loadForPlayer = smartBox.add(0x250).readU8(); } catch (_) {} }
     return {
-      build: build.name, active: active, streamOn: streamOn,
-      radius: STREAM_RADIUS, liveOverrideRadius: rad, liveStreamFar: far, speed: FLIGHT_SPEED
+      build: build.name, active: active, cameraFollow: landOriginForceEnabled,
+      loadWorldForPlayer: loadForPlayer, originWrites: landOriginWriteCount,
+      target: target.valid ? (target.region + ':' + target.blockX + ',' + target.blockY) : 'none',
+      speed: FLIGHT_SPEED
     };
   }
 };
