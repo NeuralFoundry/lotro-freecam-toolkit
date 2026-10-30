@@ -513,7 +513,7 @@ const PROLOGUE = {
   REQUEST_STAMP_THUNK: '48 8b 0d ?? ?? ?? ?? 48 81 c1 f0 00 00 00',
   LAND_RESOURCE_BUILD: '48 89 5c 24 08 48 89 74 24 10',
   LAND_RESIDENCY_UPDATE: '48 89 5c 24 08 48 89 6c 24 18',
-  LAND_RESIDENCY_LIMIT_PATCH: '41 83 fa 04 0f 86 ?? ?? ?? ??',
+  LAND_RESIDENCY_LIMIT_PATCH: '41 83 fa ?? 0f 86 ?? ?? ?? ??',   // byte3 = residency limit, runtime-tuned (disk 4, live 8); shape is the ID
   MAIN_THREAD_TICK: '48 8b c4 48 89 58 10 44 88 40 18',
   SMARTBOX_LAND_UPDATE: '48 8b c4 48 89 58 08 48 89 70 10',
   FAR_RADIUS_APPLY: '40 53 48 83 ec 20 48 8b 1d ?? ?? ?? ??',
@@ -553,6 +553,7 @@ function selectBuild(base, size) {
   if (sized.length === 0) return { build: null, scores: [] };
   const scores = sized.map(function (b) {
     let hit = 0, total = 0;
+    const miss = [];
     Object.keys(PROLOGUE).forEach(function (name) {
       const rva = b.rva[name];
       if (rva === undefined || rva === null) return;
@@ -562,15 +563,19 @@ function selectBuild(base, size) {
       try {
         bytes = new Uint8Array(base.add(rva).readByteArray(want.length));
       } catch (e) {
+        miss.push(name + '(unreadable)');
         return;
       }
       for (let i = 0; i < want.length; i++) {
         if (want[i] === '??') continue;
-        if (bytes[i] !== parseInt(want[i], 16)) return;
+        if (bytes[i] !== parseInt(want[i], 16)) {
+          miss.push(name + ' got[' + Array.prototype.map.call(bytes, function (x) { return ('0' + x.toString(16)).slice(-2); }).join(' ') + ']');
+          return;
+        }
       }
       hit++;
     });
-    return { build: b, hit: hit, total: total };
+    return { build: b, hit: hit, total: total, miss: miss };
   });
   scores.sort(function (x, y) { return y.hit - x.hit; });
   const best = scores[0];
@@ -589,7 +594,7 @@ if (build === null) {
     (picked.scores.length
       ? '. Prologue match: ' + picked.scores.map(function (s) {
           return s.build.name + ' ' + s.hit + '/' + s.total;
-        }).join(', ') + ' - no table matched completely, so the addresses have moved.'
+        }).join(', ') + ' - mismatched: ' + ((picked.scores[0] && picked.scores[0].miss) || []).join(', ') + ' (a stale hook from a previous script, or moved addresses).'
       : '. Known: ' + BUILDS.map(function (b) {
           return b.name + ' (0x' + b.size.toString(16) + ')';
         }).join(', '))
