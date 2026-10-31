@@ -63,7 +63,7 @@ echo   Which one?
 echo.
 echo     [1]  Minimal    free camera only. No render changes, no FPS cost.
 echo     [2]  Cinematic  camera plus extended draw distance, grass and terrain.
-echo     [3]  Lite       camera plus light terrain streaming (wider bubble, low cost).
+echo     [3]  Lite       camera plus light camera-follow streaming (native distance, low cost).
 echo.
 set "PICK="
 set /p "PICK=  Pick 1, 2 or 3 (enter = 1): "

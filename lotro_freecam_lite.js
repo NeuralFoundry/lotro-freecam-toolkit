@@ -59,12 +59,19 @@ const PROLOGUE = {
 
 const VK = {
   CONTROL: 0xa2, SHIFT: 0xa0, F8: 0x77,
-  FORWARD: 0x50, BACKWARD: 0xba, STRAFE_LEFT: 0x4c, STRAFE_RIGHT: 0xde, UP: 0x4f, DOWN: 0xdb
+  // original game-neutral set
+  FORWARD: 0x50, BACKWARD: 0xba, STRAFE_LEFT: 0x4c, STRAFE_RIGHT: 0xde, UP: 0x4f, DOWN: 0xdb,
+  // WASD set, active only while Ctrl is held (so the game sees Ctrl+W/A/S/D, not a walk key,
+  // and your character stays put while the camera flies)
+  W: 0x57, A: 0x41, S: 0x53, D: 0x44, Q: 0x51, E: 0x45,
+  // speed up / down on a Turkish-Q keyboard: Ç = VK_OEM_PERIOD, . = VK_OEM_2.
+  // Polled like the movement keys, no system hook.
+  SPEED_UP: 0xbe, SPEED_DOWN: 0xbf
 };
-const FLIGHT_SPEED = 5.0;
+const FLIGHT_SPEED = 5.0;              // starting speed; Ç / . change it live
+const SPEED_MIN = 0.5, SPEED_MAX = 40.0, SPEED_STEP = 1.2;
 const MAX_FRAME_DELTA = 0.05;
 const FAST_MULTIPLIER = 4.0;
-const PRECISE_MULTIPLIER = 0.25;
 const FOREGROUND_POLL_MS = 50;
 const BLOCK_SIZE = 160.0;
 
@@ -297,6 +304,23 @@ function down(vk) { if (!isLotroForeground()) return false; return (getAsyncKeyS
 let machine = NULL, controller = NULL, flightPositionPointer = NULL, flightLastPosition = null;
 let token = 0, active = false, f8WasDown = false;
 let lastTickAt = 0, stopRequested = false, cleanupComplete = false, cvarsModified = false, hook = null;
+let flightSpeed = FLIGHT_SPEED;
+
+// ---- live camera speed via the Ç / . keys (edge-triggered, polled in the tick) ----
+// Polled exactly like the movement keys: no system-wide mouse hook, so it cannot lag the
+// cursor. Each tap steps the speed; hold Shift for a temporary 4x boost on top.
+let speedUpPrev = false, speedDownPrev = false;
+function changeSpeed(dir) {
+  flightSpeed = Math.max(SPEED_MIN, Math.min(SPEED_MAX, flightSpeed * Math.pow(SPEED_STEP, dir)));
+  if (active) { try { moveSpeedScale.writeFloat(flightSpeed); } catch (_) {} }
+  log('speed=' + flightSpeed.toFixed(2));
+}
+function applySpeedKeys() {
+  const up = down(VK.SPEED_UP), dn = down(VK.SPEED_DOWN);
+  if (up && !speedUpPrev) changeSpeed(1);
+  if (dn && !speedDownPrev) changeSpeed(-1);
+  speedUpPrev = up; speedDownPrev = dn;
+}
 
 function restoreCvars() {
   if (!cvarsModified) return;
@@ -307,7 +331,7 @@ function restoreCvars() {
 function enableFlight() {
   makeFpsSlow();
   usePhysics.writeU8(0);                 // collision off, or the camera stops at walls
-  moveSpeedScale.writeFloat(FLIGHT_SPEED);
+  moveSpeedScale.writeFloat(flightSpeed);
   cvarsModified = true;
   token = pushCamera(machine, 4, 0, 0.2, 0.2);
   controller = resolveFlightController(machine);
@@ -318,7 +342,7 @@ function enableFlight() {
   primeRenderTargetFromPlayer();
   setCameraCentered(true);               // stream centre follows the camera, native radius
   enableLandOriginForce();
-  log('ON  token=' + token + '  speed=' + FLIGHT_SPEED + '  (Ctrl+F8 to stop)');
+  log('ON  token=' + token + '  speed=' + flightSpeed.toFixed(2) + '  (Ctrl+F8 to stop)');
 }
 function disableFlight(reason) {
   if (!active) return;
@@ -360,18 +384,25 @@ hook = Interceptor.attach(base.add(RVA.cameraInputTick), {
     }
     if (controller.isNull() || flightPositionPointer.isNull()) return;
     if (!target.valid) primeRenderTargetFromPlayer();
+    applySpeedKeys();                      // = / - change the base speed
     const now = Date.now();
     let dt = (now - lastTickAt) / 1000.0;
     lastTickAt = now;
     if (dt <= 0) return;
     if (dt > MAX_FRAME_DELTA) dt = MAX_FRAME_DELTA;
-    let multiplier = 1.0;
-    if (down(VK.SHIFT)) multiplier = FAST_MULTIPLIER;
-    else if (down(VK.CONTROL)) multiplier = PRECISE_MULTIPLIER;
-    dt *= multiplier;
-    const forward = (down(VK.FORWARD) ? 1 : 0) - (down(VK.BACKWARD) ? 1 : 0);
-    const strafe = (down(VK.STRAFE_RIGHT) ? 1 : 0) - (down(VK.STRAFE_LEFT) ? 1 : 0);
-    const vertical = (down(VK.UP) ? 1 : 0) - (down(VK.DOWN) ? 1 : 0);
+    const ctrlHeld = down(VK.CONTROL);
+    if (down(VK.SHIFT)) dt *= FAST_MULTIPLIER;
+    let forward = (down(VK.FORWARD) ? 1 : 0) - (down(VK.BACKWARD) ? 1 : 0);
+    let strafe = (down(VK.STRAFE_RIGHT) ? 1 : 0) - (down(VK.STRAFE_LEFT) ? 1 : 0);
+    let vertical = (down(VK.UP) ? 1 : 0) - (down(VK.DOWN) ? 1 : 0);
+    if (ctrlHeld) {                        // hold Ctrl for WASD (game reads Ctrl+W/etc., character stays)
+      forward += (down(VK.W) ? 1 : 0) - (down(VK.S) ? 1 : 0);
+      strafe += (down(VK.D) ? 1 : 0) - (down(VK.A) ? 1 : 0);
+      vertical += (down(VK.E) ? 1 : 0) - (down(VK.Q) ? 1 : 0);
+      forward = Math.max(-1, Math.min(1, forward));
+      strafe = Math.max(-1, Math.min(1, strafe));
+      vertical = Math.max(-1, Math.min(1, vertical));
+    }
     if (forward === 0 && strafe === 0 && vertical === 0) { return; }
     const before = flightLastPosition === null ? readFlightPosition() : flightLastPosition;
     if (forward !== 0) moveForward(controller, forward * dt);
@@ -385,8 +416,9 @@ hook = Interceptor.attach(base.add(RVA.cameraInputTick), {
 
 log('=== LOTRO FREECAM (lite - camera + light camera-follow streaming) ===');
 log('build ' + build.name + '  (module size 0x' + mod.size.toString(16) + ')');
-log('Ctrl+F8 start/stop | mouse look | LShift 4x | LCtrl precise');
-log('Move  P fwd | ;/S back | L left | \'/I right | O up | [/G down');
+log('Ctrl+F8 start/stop | mouse look | C(Ç) faster / . slower | LShift 4x boost');
+log('Move  P fwd | ; back | L left | \' right | O up | [ down');
+log('   or hold Ctrl + WASD  (W/S fwd-back, A/D strafe, E up, Q down) - character stays put');
 log('Streaming centre follows the camera at NATIVE render distance. Character never moves.');
 
 rpc.exports = {
@@ -402,6 +434,12 @@ rpc.exports = {
     log('restore complete (active=' + active + ')');
     return !active;
   },
+  setSpeed: function (v) {
+    flightSpeed = Math.max(SPEED_MIN, Math.min(SPEED_MAX, +v || flightSpeed));
+    if (active) { try { moveSpeedScale.writeFloat(flightSpeed); } catch (_) {} }
+    log('speed=' + flightSpeed.toFixed(2));
+    return flightSpeed;
+  },
   status: function () {
     let loadForPlayer = -1;
     if (resolveSmartBox()) { try { loadForPlayer = smartBox.add(0x250).readU8(); } catch (_) {} }
@@ -409,7 +447,7 @@ rpc.exports = {
       build: build.name, active: active, cameraFollow: landOriginForceEnabled,
       loadWorldForPlayer: loadForPlayer, originWrites: landOriginWriteCount,
       target: target.valid ? (target.region + ':' + target.blockX + ',' + target.blockY) : 'none',
-      speed: FLIGHT_SPEED
+      speed: +flightSpeed.toFixed(2)
     };
   }
 };
